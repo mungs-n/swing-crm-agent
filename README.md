@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # 🤖 swing-crm-agent
 
 > 2026 SWING 해외 프로그램 in 실리콘밸리  
@@ -59,3 +60,6 @@ git checkout -b feature/email        # 탭2 담당 B
 - AI: Claude API (Tool Use)
 - 데이터 처리: pandas
 - 이메일 발송: SendGrid
+=======
+# swing-crm-agent
+>>>>>>> 6007f84d98fa14fc798a217c93e899cac4b508fb
