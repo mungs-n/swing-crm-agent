@@ -1,5 +1,5 @@
 """
-가상 페르소나 기반 합성 데이터 생성 스크립트
+데이터 생성 스크립트
 실행: python data/generate_data.py
 """
 
@@ -17,7 +17,7 @@ START_DATE = datetime(2024, 1, 1)
 END_DATE = datetime(2024, 6, 28)
 TOTAL_DAYS = (END_DATE - START_DATE).days
 
-# 페르소나 행동 규칙 정의
+# 행동 규칙 정의
 PERSONA_RULES = {
     "신규_탐색자": {
         "count": 150,
