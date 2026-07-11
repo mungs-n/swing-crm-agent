@@ -1,93 +1,95 @@
-"""
-데이터 생성 스크립트
-실행: python data/generate_data.py
-"""
-
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
 import random
+import numpy as np
+import pandas as pd
 import uuid
+from datetime import datetime, timedelta
+import os
+os.makedirs("data", exist_ok=True)
 
-# 랜덤 시드 고정 (팀원 모두 같은 데이터 생성)
 random.seed(42)
 np.random.seed(42)
 
-START_DATE = datetime(2024, 1, 1)
-END_DATE = datetime(2024, 6, 28)
+START_DATE = datetime(2026, 1, 1)
+END_DATE = datetime(2026, 6, 28)
 TOTAL_DAYS = (END_DATE - START_DATE).days
 
-# 행동 규칙 정의
 PERSONA_RULES = {
-    "신규_탐색자": {
+    "new_explorer": {
         "count": 150,
         "sessions_per_week": (1, 4),
         "purchase_prob": 0.05,
-        "avg_order_value": (15000, 40000),
+        "avg_order_value": (30000, 80000),
         "discount_sensitivity": 0.3,
         "cart_abandon_rate": 0.70,
         "email_open_rate": 0.25,
     },
-    "충동_구매자": {
+    "impulsive_buyer": {
         "count": 200,
-        "sessions_per_week": (4, 8),
+        "sessions_per_week": (2, 7),
         "purchase_prob": 0.35,
-        "avg_order_value": (20000, 60000),
-        "discount_sensitivity": 0.05,
+        "avg_order_value": (50000, 100000),
+        "discount_sensitivity": 0.1,
         "cart_abandon_rate": 0.25,
         "email_open_rate": 0.40,
     },
-    "할인_구매자": {
+    "discount_hunter": {
         "count": 200,
         "sessions_per_week": (1, 3),
-        "purchase_prob": 0.06,
-        "avg_order_value": (80000, 200000),
-        "discount_sensitivity": 0.70,
-        "cart_abandon_rate": 0.80,
-        "email_open_rate": 0.65,
+        "purchase_prob": 0.10,
+        "avg_order_value": (80000, 150000),
+        "discount_sensitivity": 0.8,
+        "cart_abandon_rate": 0.65,
+        "email_open_rate": 0.70,
     },
-    "브랜드_충성_고객": {
+    "brand_loyalist": {
         "count": 150,
-        "sessions_per_week": (2, 5),
+        "sessions_per_week": (4, 6),
         "purchase_prob": 0.25,
-        "avg_order_value": (50000, 120000),
-        "discount_sensitivity": 0.10,
+        "avg_order_value": (80000, 250000),
+        "discount_sensitivity": 0.15,
         "cart_abandon_rate": 0.30,
         "email_open_rate": 0.55,
     },
-    "이탈_위험_고객": {
+    "churn_risk": {
         "count": 150,
         "sessions_per_week": (0, 2),
-        "purchase_prob": 0.04,
+        "purchase_prob": 0.03,
         "avg_order_value": (30000, 80000),
         "discount_sensitivity": 0.40,
         "cart_abandon_rate": 0.85,
-        "email_open_rate": 0.20,
+        "email_open_rate": 0.15,
     },
-    "휴면_고객": {
+    "dormant": {
         "count": 150,
         "sessions_per_week": (0, 1),
         "purchase_prob": 0.01,
-        "avg_order_value": (20000, 60000),
-        "discount_sensitivity": 0.50,
+        "avg_order_value": (30000, 60000),
+        "discount_sensitivity": 0.05,
         "cart_abandon_rate": 0.95,
-        "email_open_rate": 0.10,
+        "email_open_rate": 0.05,
     },
 }
 
-CATEGORIES = ["상의", "하의", "아우터", "원피스", "신발", "가방", "액세서리"]
+CATEGORIES = ["tops", "bottoms", "outerwear", "dress", "shoes", "bags", "accessories", "underwear"]
 GENDERS = ["F", "M"]
-CHANNELS = ["SNS", "검색광고", "직접유입", "이메일"]
-AGES = list(range(20, 55))
+CHANNELS = ["SNS", "search_ad", "direct", "email", "referral"]
+AGES = list(range(20, 60))
+
+
+def random_timestamp(base_date):
+    random_time = timedelta(
+        hours=random.randint(0, 23),
+        minutes=random.randint(0, 59),
+        seconds=random.randint(0, 59)
+    )
+    return (base_date + random_time).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def generate_users():
     users = []
     for persona, rules in PERSONA_RULES.items():
         for _ in range(rules["count"]):
-            signup_date = START_DATE + timedelta(
-                days=random.randint(0, TOTAL_DAYS)
-            )
+            signup_date = START_DATE + timedelta(days=random.randint(0, TOTAL_DAYS))
             users.append({
                 "user_id": str(uuid.uuid4())[:8],
                 "persona_type": persona,
@@ -112,23 +114,21 @@ def generate_orders_and_events(users_df):
         if active_days <= 0:
             continue
 
-        # 세션 수 결정
         weeks = active_days / 7
         sessions_per_week = random.uniform(*rules["sessions_per_week"])
         total_sessions = int(weeks * sessions_per_week)
 
         for _ in range(total_sessions):
-            session_date = signup_date + timedelta(
-                days=random.randint(0, active_days)
-            )
+            session_date = signup_date + timedelta(days=random.randint(0, active_days))
             session_id = str(uuid.uuid4())[:8]
             category = random.choice(CATEGORIES)
+            ts = random_timestamp(session_date)
 
-            # page_view 이벤트
+            # page_view
             events.append({
                 "user_id": user["user_id"],
                 "session_id": session_id,
-                "timestamp": session_date.strftime("%Y-%m-%d %H:%M:%S"),
+                "timestamp": ts,
                 "event_type": "page_view",
                 "product_id": str(uuid.uuid4())[:6],
                 "category": category,
@@ -141,7 +141,7 @@ def generate_orders_and_events(users_df):
                 events.append({
                     "user_id": user["user_id"],
                     "session_id": session_id,
-                    "timestamp": session_date.strftime("%Y-%m-%d %H:%M:%S"),
+                    "timestamp": ts,
                     "event_type": "product_view",
                     "product_id": str(uuid.uuid4())[:6],
                     "category": category,
@@ -153,7 +153,7 @@ def generate_orders_and_events(users_df):
                     events.append({
                         "user_id": user["user_id"],
                         "session_id": session_id,
-                        "timestamp": session_date.strftime("%Y-%m-%d %H:%M:%S"),
+                        "timestamp": ts,
                         "event_type": "add_to_cart",
                         "product_id": str(uuid.uuid4())[:6],
                         "category": category,
@@ -162,18 +162,23 @@ def generate_orders_and_events(users_df):
 
                     # purchase
                     if random.random() < rules["purchase_prob"]:
-                        order_amount = random.randint(
-                            *[int(x) for x in rules["avg_order_value"]]
-                        )
-                        discount = random.randint(0, int(order_amount * 0.3))
+                        order_amount = random.randint(*[int(x) for x in rules["avg_order_value"]])
+                        product_id = str(uuid.uuid4())[:6]
                         order_id = str(uuid.uuid4())[:8]
+
+                        # coupon_used: 할인 민감도 기반
+                        coupon_used = random.random() < min(rules["discount_sensitivity"] + 0.2, 0.9)
+                        discount = random.randint(
+                            int(order_amount * 0.05),
+                            int(order_amount * 0.3)
+                        ) if coupon_used else 0
 
                         events.append({
                             "user_id": user["user_id"],
                             "session_id": session_id,
-                            "timestamp": session_date.strftime("%Y-%m-%d %H:%M:%S"),
+                            "timestamp": ts,
                             "event_type": "purchase",
-                            "product_id": str(uuid.uuid4())[:6],
+                            "product_id": product_id,
                             "category": category,
                             "price": order_amount,
                         })
@@ -184,26 +189,38 @@ def generate_orders_and_events(users_df):
                             "order_date": session_date.strftime("%Y-%m-%d"),
                             "total_amount": order_amount,
                             "discount_amount": discount,
-                            "coupon_used": discount > 0,
+                            "coupon_used": coupon_used,
                             "category": category,
                         })
+
+                        # review_write (30% of buyers)
+                        if random.random() < 0.3:
+                            events.append({
+                                "user_id": user["user_id"],
+                                "session_id": session_id,
+                                "timestamp": ts,
+                                "event_type": "review_write",
+                                "product_id": product_id,
+                                "category": category,
+                                "price": None,
+                            })
 
     return pd.DataFrame(orders), pd.DataFrame(events)
 
 
 if __name__ == "__main__":
-    print("📊 데이터 생성 시작...")
+    print("Generating data...")
 
-    print("👥 유저 데이터 생성 중...")
+    print("Creating users...")
     users_df = generate_users()
     users_df.to_csv("data/users.csv", index=False)
-    print(f"   ✅ users.csv 생성 완료 ({len(users_df)}명)")
+    print(f"users.csv done ({len(users_df)} users)")
 
-    print("🛒 주문/이벤트 데이터 생성 중... (시간이 좀 걸려요)")
+    print("Creating orders and events...")
     orders_df, events_df = generate_orders_and_events(users_df)
     orders_df.to_csv("data/orders.csv", index=False)
     events_df.to_csv("data/events.csv", index=False)
-    print(f"   ✅ orders.csv 생성 완료 ({len(orders_df)}건)")
-    print(f"   ✅ events.csv 생성 완료 ({len(events_df)}건)")
+    print(f"orders.csv done ({len(orders_df)} orders)")
+    print(f"events.csv done ({len(events_df)} events)")
 
-    print("\n🎉 데이터 생성 완료!")
+    print("Done!")
