@@ -6,23 +6,55 @@
 import streamlit as st
 import anthropic
 import os
+import pandas as pd
+from datetime import timedelta
 
 
 def get_dashboard_summary():
-    """대시보드 현재 지표 요약 (Claude에게 넘길 컨텍스트)"""
-    # TODO: 실제 계산된 지표로 교체
-    return """
-    현재 대시보드 지표:
-    - 활성 고객 수: 742명 (전월 대비 +3.2%)
-    - GMV: ₩99.7M (+10.8%)
-    - AOV: ₩37,900 (-0.1%)
-    - 구매 전환율: 6.2% (+13.3%)
-    - 30일 이탈률: 18.4% (+2.1%p 악화)
-    - 이탈 위험 고객: 152명
-    - 휴면 고객: 198명
-    - 장바구니 이탈률: 93.9%
-    """
+    """대시보드 현재 지표 요약 (Claude에게 넘길 컨텍스트) - 실제 CSV 기반 계산"""
+    users = pd.read_csv("data/users.csv")
+    orders = pd.read_csv("data/orders.csv")
+    events = pd.read_csv("data/events.csv")
 
+    orders["order_date"] = pd.to_datetime(orders["order_date"])
+
+    # 기준일: 데이터 안 가장 최근 주문일
+    latest_date = orders["order_date"].max()
+    last_30d = latest_date - timedelta(days=30)
+    last_60d = latest_date - timedelta(days=60)
+
+    # 전체 고객 / 최근 30일 활성 고객
+    total_users = users["user_id"].nunique()
+    active_users_30d = orders[orders["order_date"] >= last_30d]["user_id"].nunique()
+
+    # GMV / AOV
+    gmv = orders["total_amount"].sum()
+    order_count = len(orders)
+    aov = gmv / order_count if order_count > 0 else 0
+
+    # 구매 전환율: (구매 유저 수) / (전체 방문 유저 수)
+    purchase_users = events[events["event_type"] == "purchase"]["user_id"].nunique()
+    all_visitor_users = events["user_id"].nunique()
+    conversion_rate = (purchase_users / all_visitor_users * 100) if all_visitor_users > 0 else 0
+
+    # 장바구니 이탈률: 담기만 하고 구매 안 한 비율
+    cart_users = events[events["event_type"] == "add_to_cart"]["user_id"].nunique()
+    cart_abandon_rate = (1 - purchase_users / cart_users) * 100 if cart_users > 0 else 0
+
+    # 휴면 고객: 마지막 주문이 60일 이상 지난 고객
+    last_order_per_user = orders.groupby("user_id")["order_date"].max()
+    dormant_users = (last_order_per_user < last_60d).sum()
+
+    return f"""
+    현재 대시보드 지표 (데이터 기준일: {latest_date.date()}):
+    - 전체 가입 고객 수: {total_users}명
+    - 최근 30일 활성 고객 수: {active_users_30d}명
+    - GMV(총 거래액): ₩{gmv:,.0f}
+    - AOV(평균 주문 금액): ₩{aov:,.0f}
+    - 구매 전환율: {conversion_rate:.1f}%
+    - 장바구니 이탈률: {cart_abandon_rate:.1f}%
+    - 휴면 고객(60일 이상 미주문): {dormant_users}명
+    """
 
 def run_ai_analysis(summary):
     """Claude API 호출해서 인사이트 생성"""
