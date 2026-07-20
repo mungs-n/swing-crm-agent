@@ -7,6 +7,7 @@ import streamlit as st
 import anthropic
 import pandas as pd
 import os
+import time
 
 
 PERSONAS = {
@@ -19,29 +20,15 @@ PERSONAS = {
 }
 
 
-def generate_email_copy(segment, persona_desc):
-    """Claude API로 이메일 카피 생성"""
-    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
-
-    with client.messages.stream(
-        model="claude-sonnet-4-6",
-        max_tokens=500,
-        system="""당신은 이커머스 CRM 마케팅 카피라이터입니다.
-주어진 고객 세그먼트 특성에 맞는 개인화 이메일을 한국어로 작성하세요.
-형식:
-제목: (제목)
-본문: (2-3문장)""",
-        messages=[{
-            "role": "user",
-            "content": f"세그먼트: {segment}\n특성: {persona_desc}\n이 고객군에게 보낼 이메일을 작성해주세요."
-        }]
-    ) as stream:
-        for text in stream.text_stream:
-            yield text
+def generate_email_copy_mock(segment, persona_desc):
+    fake_response = f"제목: [테스트] {segment} 회원님을 위한 특별 혜택!\n\n본문: 안녕하세요. {persona_desc} 특성에 맞춘 마케팅 카피 테스트"
+    for word in fake_response.split():
+        yield word + " "
+        time.sleep(0.1)
 
 
 def render_campaign_builder():
-    """캠페인 빌더 UI - Campaigns.py에서 호출"""
+    """캠페인 빌더 UI - Home.py에서 호출"""
     st.subheader("📋 캠페인 설정")
 
     col1, col2 = st.columns(2)
@@ -64,7 +51,7 @@ def render_campaign_builder():
         with st.spinner("Claude가 카피를 작성하고 있습니다..."):
             full_response = ""
             placeholder = st.empty()
-            for chunk in generate_email_copy(selected_segment, persona_info['desc']):
+            for chunk in generate_email_copy_mock(selected_segment, persona_info['desc']):
                 full_response += chunk
                 placeholder.markdown(full_response)
 
@@ -72,3 +59,5 @@ def render_campaign_builder():
         st.session_state["generated_copy"] = full_response
         st.session_state["selected_segment"] = selected_segment
         st.session_state["target_count"] = persona_info["count"]
+
+render_campaign_builder()
