@@ -7,7 +7,7 @@ import streamlit as st
 import anthropic
 import os
 import pandas as pd
-from datetime import timedelta
+from datetime import timedelta, datetime
 
 
 def get_dashboard_summary():
@@ -56,6 +56,7 @@ def get_dashboard_summary():
     - 휴면 고객(60일 이상 미주문): {dormant_users}명
     """
 
+
 def run_ai_analysis(summary):
     """Claude API 호출해서 인사이트 생성"""
     client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
@@ -87,16 +88,39 @@ def run_ai_analysis(summary):
 
 def render_ai_panel():
     """AI 인사이트 패널 - Dashboard.py에서 호출"""
-    st.subheader("🤖 AI 인사이트")
 
-    col1, col2 = st.columns([3, 1])
-    with col2:
-        analyze_btn = st.button("AI 분석 실행", type="primary", use_container_width=True)
+    # 세션 상태 초기화 (최초 1회만 자동 분석, 이후엔 저장된 결과 재사용)
+    if "ai_insight_result" not in st.session_state:
+        st.session_state.ai_insight_result = None
+        st.session_state.ai_insight_time = None
 
-    with col1:
-        result_placeholder = st.empty()
+    header_col1, header_col2 = st.columns([3, 2])
+    with header_col1:
+        st.subheader("🤖 AI 인사이트")
+    with header_col2:
+        if st.session_state.ai_insight_result:
+            st.markdown(
+                f"""
+                <div style="text-align: right; margin-top: 22px;">
+                    <span style="
+                        display: inline-block;
+                        white-space: nowrap;
+                        background-color: #EEF2FF;
+                        color: #4F46E5;
+                        padding: 4px 14px;
+                        border-radius: 999px;
+                        font-size: 13px;
+                        font-weight: 500;
+                    ">✨ Claude AI · {st.session_state.ai_insight_time}</span>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
 
-    if analyze_btn:
+    result_placeholder = st.empty()
+
+    def run_and_store():
+        """분석 실행 후 결과를 session_state에 저장"""
         summary = get_dashboard_summary()
         with result_placeholder.container():
             with st.spinner("Claude가 데이터를 분석하고 있습니다..."):
@@ -105,5 +129,23 @@ def render_ai_panel():
                 for chunk in run_ai_analysis(summary):
                     full_response += chunk
                     response_placeholder.markdown(full_response)
+        st.session_state.ai_insight_result = full_response
+        st.session_state.ai_insight_time = datetime.now().strftime("%H:%M 분석")
+
+    # 최초 진입: 자동으로 한 번 분석 실행
+    if st.session_state.ai_insight_result is None:
+        run_and_store()
+        st.rerun()  # 배지를 표시하기 위해 한 번 새로고침
     else:
-        result_placeholder.info("'AI 분석 실행' 버튼을 클릭하면 현재 데이터를 기반으로 인사이트를 생성합니다.")
+        # 저장된 결과 재사용 (API 재호출 없음)
+        result_placeholder.markdown(st.session_state.ai_insight_result)
+
+    # 재분석 버튼 + 캠페인 이동 버튼
+    btn_col1, btn_col2 = st.columns([1, 3])
+    with btn_col1:
+        if st.button("🔄 다시 분석하기"):
+            run_and_store()
+            st.rerun()
+    with btn_col2:
+        if st.button("🚨 이탈 위험 캠페인 만들기", type="secondary"):
+            st.switch_page("pages/2_Campaigns.py")
