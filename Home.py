@@ -24,10 +24,10 @@ elif menu == "캠페인 자동화":
     # 기존에 만들었던 tester 파일에서 함수를 불러옵니다.
     # (파일 위치에 따라 components.campaign_builder_tester 또는 pages.1_Campaign_Builder 등으로 수정)
     try:
-        from components.campaign_builder_tester import render_campaign_builder
+        from components.campaign_builder_copy import render_campaign_builder
         render_campaign_builder()
     except ImportError:
-        from pages import render_campaign_builder
+        from components.campaign_builder_copy import render_campaign_builder
         render_campaign_builder()
 
 st.markdown("""
@@ -37,4 +37,4 @@ st.markdown("""
 
 - 📊 **대시보드**: 고객 분석 및 AI 인사이트
 - 🤖 **캠페인 자동화**: AI 기반 이메일 자동화
-""") 
+""")

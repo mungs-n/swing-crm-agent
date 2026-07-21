@@ -5,10 +5,62 @@
 
 import streamlit as st
 import anthropic
+from dotenv import load_dotenv
 import pandas as pd
 import os
 import time
 import random
+
+load_dotenv()
+
+def get_customer_from_events(csv_path="C:/Users/이주현/OneDrive/Documents/카카오톡 받은 파일/events.csv", target_user_id=None):
+    try:
+        df = pd.read_csv(csv_path)
+    except Exception as e:
+        print(f"파일을 읽는 중 에러 발생: {e}")
+        # 파일이 없을 때 대비용 기본값 반환
+        return {
+            'name': target_user_id or '고객님',
+            'recently_viewed': '없음',
+            'cart_items': [],
+            'recent_purchase': '없음'
+        }
+
+    # 만약 지정된 user_id가 없으면 가장 데이터가 많은 user_id 1명 임의 선택
+    if not target_user_id:
+        target_user_id = df['user_id'].mode()[0]
+
+    # 해당 유저의 로그만 추출
+    user_df = df[df['user_id'] == target_user_id].sort_values('timestamp', ascending=False)
+
+    if user_df.empty:
+        return {
+            'name': str(target_user_id),
+            'recently_viewed': '없음',
+            'cart_items': [],
+            'recent_purchase': '없음'
+        }
+
+    # 1. 최근 조회 상품 (product_view 중 가장 최근 1개)
+    views = user_df[user_df['event_type'] == 'product_view']
+    recently_viewed = f"{views.iloc[0]['category']} (상품 ID: {views.iloc[0]['product_id']})" if not views.empty else '없음'
+
+    # 2. 장바구니에 담긴 상품 목록 (add_to_cart 중 최근 최대 3개)
+    carts = user_df[user_df['event_type'] == 'add_to_cart']
+    cart_items = [f"{row['category']}({row['product_id']})" for _, row in carts.head(3).iterrows()] if not carts.empty else []
+
+    # 3. 최근 구매한 상품 (purchase 중 가장 최근 1개)
+    purchases = user_df[user_df['event_type'] == 'purchase']
+    recent_purchase = f"{purchases.iloc[0]['category']} (상품 ID: {purchases.iloc[0]['product_id']})" if not purchases.empty else '없음'
+
+    # customer 딕셔너리 리턴
+    return {
+        'name': f"고객({target_user_id[:6]})", # user_id 앞 6자리 활용
+        'recently_viewed': recently_viewed,
+        'cart_items': cart_items,
+        'recent_purchase': recent_purchase
+    }
+
 
 
 PERSONAS = {
@@ -61,10 +113,19 @@ def render_campaign_builder():
     col1, col2 = st.columns(2)
 
     with col1:
+        segments = list(PERSONAS.keys())
+        default_segment=st.session_state.get("recommended_segment")
+
+        default_index = 0
+        if default_segment in segments:
+            default_index = segments.index(default_segment)
+
         selected_segment = st.selectbox(
-            "타겟 세그먼트",
-            options=list(PERSONAS.keys())
-        )
+                "타겟 세그먼트",
+                options=segments,
+                index=default_index
+            )
+        
         persona_info = PERSONAS[selected_segment]
         st.caption(f"대상 인원: {persona_info['count']}명 | {persona_info['desc']}")
 
@@ -78,13 +139,19 @@ def render_campaign_builder():
         with st.spinner("Claude가 카피를 작성하고 있습니다..."):
             full_response = ""
             placeholder = st.empty()
-            for chunk in generate_email_copy(selected_segment, persona_info['desc']):
+
+            # 1. events.csv에서 고객 데이터 추출 (get_customer_from_events 함수 사용)
+            csv_path = r"C:/Users/이주현/OneDrive/Documents/카카오톡 받은 파일/events.csv"
+            customer_data = get_customer_from_events(csv_path)
+
+            # 2. 이메일 카피 생성 및 실시간 화면 출력
+            for chunk in generate_email_copy(selected_segment, persona_info['desc'], customer_data):
                 full_response += chunk
-                placeholder.markdown(full_response)
+                placeholder.markdown(full_response + "▌") # 화면에 실시간으로 작성되는 효과
+
+            placeholder.markdown(full_response) # 최종 결과 표시
 
         # 세션 상태에 저장해서 email_sender.py에서 사용
         st.session_state["generated_copy"] = full_response
         st.session_state["selected_segment"] = selected_segment
         st.session_state["target_count"] = persona_info["count"]
-
-render_campaign_builder()
