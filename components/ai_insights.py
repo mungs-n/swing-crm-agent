@@ -450,7 +450,7 @@ def render_ai_panel():
         if st.button("🚀 캠페인 자동화 시작하기", type="secondary"):
             users, orders, events = load_data()
             st.session_state["recommended_segment"] = recommend_segment(users, orders, events)
-            st.switch_page("pages/2_Campaigns.py")
+            st.switch_page("pages/2_Campaign.py")
 
     with st.expander("📊 상세 분석 (RFM 산포도 · 코호트 리텐션)", expanded=False):
         render_detail_analysis()
