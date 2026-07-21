@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # 🤖 swing-crm-agent
 
 > 2026 SWING 해외 프로그램 in 실리콘밸리  

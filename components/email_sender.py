@@ -43,7 +43,8 @@ def save_history(segment, copy, count, status):
         df = pd.DataFrame(columns=new_row.keys())
 
     df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-    df.to_csv(HISTORY_FILE, index=False)
+    # utf-8-sig로 저장해야 엑셀에서 열었을 때 한글이 깨지지 않음
+    df.to_csv(HISTORY_FILE, index=False, encoding="utf-8-sig")
 
 
 def render_email_sender():
