@@ -6,7 +6,8 @@ load_dotenv()
 st.set_page_config(
     page_title="AI CRM Dashboard",
     page_icon="📊",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
 st.title("📊 AI CRM Dashboard")
