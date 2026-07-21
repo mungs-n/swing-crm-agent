@@ -8,59 +8,72 @@ import anthropic
 from dotenv import load_dotenv
 import pandas as pd
 import os
-import time
 import random
+
+# ★ 1. 페이지 설정은 무조건 코드 최상단에 배치
+st.set_page_config(
+    page_title="AI CRM Dashboard",
+    page_icon="📊",
+    layout="wide"
+)
 
 load_dotenv()
 
-def get_customer_from_events(csv_path="C:/Users/이주현/OneDrive/Documents/카카오톡 받은 파일/events.csv", target_user_id=None):
-    try:
-        df = pd.read_csv(csv_path)
-    except Exception as e:
-        print(f"파일을 읽는 중 에러 발생: {e}")
-        # 파일이 없을 때 대비용 기본값 반환
+# ==========================================
+# [안전성을 강화한 데이터 로딩 함수]
+# ==========================================
+
+def get_customer_from_events(target_user_id=None):
+    """경로 에러 방지를 위해 상대 경로 및 예외 처리 적용"""
+    # 1. 상대 경로를 기본으로 설정 (동일 폴더 또는 data 폴더 탐색)
+    possible_paths = [
+        "events.csv",
+        "data/events.csv",
+        r"C:/Users/이주현/OneDrive/Documents/카카오톡 받은 파일/events.csv"
+    ]
+    
+    csv_path = None
+    for p in possible_paths:
+        if os.path.exists(p):
+            csv_path = p
+            break
+
+    # 파일이 없는 경우 기본 더미 데이터 반환 (화면 다운 방지)
+    if not csv_path:
         return {
             'name': target_user_id or '고객님',
-            'recently_viewed': '없음',
-            'cart_items': [],
-            'recent_purchase': '없음'
+            'recently_viewed': '아우터 (상품 ID: 6071ce)',
+            'cart_items': ['레깅스(1a330a)', '조거팬츠(7b65c9)'],
+            'recent_purchase': '스윔웨어 (상품 ID: 99eaa9)'
         }
 
-    # 만약 지정된 user_id가 없으면 가장 데이터가 많은 user_id 1명 임의 선택
-    if not target_user_id:
-        target_user_id = df['user_id'].mode()[0]
+    try:
+        df = pd.read_csv(csv_path)
+        if not target_user_id and not df.empty:
+            target_user_id = df['user_id'].mode()[0]
 
-    # 해당 유저의 로그만 추출
-    user_df = df[df['user_id'] == target_user_id].sort_values('timestamp', ascending=False)
+        user_df = df[df['user_id'] == target_user_id].sort_values('timestamp', ascending=False)
 
-    if user_df.empty:
+        if user_df.empty:
+            return {'name': str(target_user_id), 'recently_viewed': '없음', 'cart_items': [], 'recent_purchase': '없음'}
+
+        views = user_df[user_df['event_type'] == 'product_view']
+        recently_viewed = f"{views.iloc[0]['category']} (상품 ID: {views.iloc[0]['product_id']})" if not views.empty else '없음'
+
+        carts = user_df[user_df['event_type'] == 'add_to_cart']
+        cart_items = [f"{row['category']}({row['product_id']})" for _, row in carts.head(3).iterrows()] if not carts.empty else []
+
+        purchases = user_df[user_df['event_type'] == 'purchase']
+        recent_purchase = f"{purchases.iloc[0]['category']} (상품 ID: {purchases.iloc[0]['product_id']})" if not purchases.empty else '없음'
+
         return {
-            'name': str(target_user_id),
-            'recently_viewed': '없음',
-            'cart_items': [],
-            'recent_purchase': '없음'
+            'name': f"고객({str(target_user_id)[:6]})",
+            'recently_viewed': recently_viewed,
+            'cart_items': cart_items,
+            'recent_purchase': recent_purchase
         }
-
-    # 1. 최근 조회 상품 (product_view 중 가장 최근 1개)
-    views = user_df[user_df['event_type'] == 'product_view']
-    recently_viewed = f"{views.iloc[0]['category']} (상품 ID: {views.iloc[0]['product_id']})" if not views.empty else '없음'
-
-    # 2. 장바구니에 담긴 상품 목록 (add_to_cart 중 최근 최대 3개)
-    carts = user_df[user_df['event_type'] == 'add_to_cart']
-    cart_items = [f"{row['category']}({row['product_id']})" for _, row in carts.head(3).iterrows()] if not carts.empty else []
-
-    # 3. 최근 구매한 상품 (purchase 중 가장 최근 1개)
-    purchases = user_df[user_df['event_type'] == 'purchase']
-    recent_purchase = f"{purchases.iloc[0]['category']} (상품 ID: {purchases.iloc[0]['product_id']})" if not purchases.empty else '없음'
-
-    # customer 딕셔너리 리턴
-    return {
-        'name': f"고객({target_user_id[:6]})", # user_id 앞 6자리 활용
-        'recently_viewed': recently_viewed,
-        'cart_items': cart_items,
-        'recent_purchase': recent_purchase
-    }
-
+    except Exception as e:
+        return {'name': '고객님', 'recently_viewed': '없음', 'cart_items': [], 'recent_purchase': '없음'}
 
 
 PERSONAS = {
@@ -72,17 +85,22 @@ PERSONAS = {
     "휴면 고객": {"count": 150, "desc": ["90일 이상 미방문", "윈백 캠페인 대상", "다시 돌아오면 제공되는 혜택", "강렬한 한 줄 소구로 극적인 이메일 제목"]},
 }
 
-def generate_email_copy(segment : str, persona_desc: list, customer: dict):
-    """Claude API로 이메일 카피 생성"""
-    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
-    k=random.randint(1, 2)
+def generate_email_copy(segment: str, persona_desc: list, customer: dict):
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        yield "⚠️ ANTHROPIC_API_KEY가 설정되지 않았습니다. .env 파일을 확인해주세요."
+        return
+
+    client = anthropic.Anthropic(api_key=api_key)
+
+    k = min(len(persona_desc), random.randint(1, 2))
     chosen_traits = random.sample(persona_desc, k)
 
     with client.messages.stream(
         model="claude-sonnet-4-6",
         max_tokens=500,
-        system=f"""당신은 ---기업 특성--- 마케팅 카피라이터입니다.
+        system=f"""당신은 20~30대 여성에게 인기가 가장 많은 스포츠 웨어 브랜드의 마케팅 카피라이터입니다.
         1. 이번 메일에서 반영할 소구 포인트는 아래로 한정합니다. 다른 특성은 언급하지 마세요. - {chosen_traits}
         2. 구체적인 숫자, 시간, 혜택 디테일을 반영하여 작성하세요.
         3. 아래 고객 데이터 중 최소 1개 이상을 본문에 자연스럽게 포함시켜 이 사람만을 위한 메일인 것처럼 작성하세요. 
@@ -107,24 +125,23 @@ def generate_email_copy(segment : str, persona_desc: list, customer: dict):
 
 
 def render_campaign_builder():
-    """캠페인 빌더 UI - Home.py에서 호출"""
     st.subheader("📋 캠페인 설정")
 
     col1, col2 = st.columns(2)
 
     with col1:
         segments = list(PERSONAS.keys())
-        default_segment=st.session_state.get("recommended_segment")
+        default_segment = st.session_state.get("recommended_segment")
 
         default_index = 0
         if default_segment in segments:
             default_index = segments.index(default_segment)
 
         selected_segment = st.selectbox(
-                "타겟 세그먼트",
-                options=segments,
-                index=default_index
-            )
+            "타겟 세그먼트",
+            options=segments,
+            index=default_index
+        )
         
         persona_info = PERSONAS[selected_segment]
         st.caption(f"대상 인원: {persona_info['count']}명 | {persona_info['desc']}")
@@ -140,18 +157,44 @@ def render_campaign_builder():
             full_response = ""
             placeholder = st.empty()
 
-            # 1. events.csv에서 고객 데이터 추출 (get_customer_from_events 함수 사용)
-            csv_path = r"C:/Users/이주현/OneDrive/Documents/카카오톡 받은 파일/events.csv"
-            customer_data = get_customer_from_events(csv_path)
+            customer_data = get_customer_from_events()
 
-            # 2. 이메일 카피 생성 및 실시간 화면 출력
             for chunk in generate_email_copy(selected_segment, persona_info['desc'], customer_data):
                 full_response += chunk
-                placeholder.markdown(full_response + "▌") # 화면에 실시간으로 작성되는 효과
+                placeholder.markdown(full_response + "▌")
 
-            placeholder.markdown(full_response) # 최종 결과 표시
+            placeholder.markdown(full_response)
 
-        # 세션 상태에 저장해서 email_sender.py에서 사용
         st.session_state["generated_copy"] = full_response
         st.session_state["selected_segment"] = selected_segment
         st.session_state["target_count"] = persona_info["count"]
+
+
+# ==========================================
+# [메인 대시보드 UI 및 네비게이션]
+# ==========================================
+
+st.title("📊 AI CRM Dashboard")
+st.markdown("---")
+
+st.sidebar.title("사이드바")
+menu = st.sidebar.radio(
+    "이동할 페이지를 선택하세요.",
+    ["대시보드", "캠페인 자동화"]
+)
+
+if menu == "대시보드":
+    st.header("🎯 CRM 마케팅 대시보드 홈")
+    st.write("오신 것을 환영합니다! 왼쪽 사이드바 메뉴에서 원하는 기능을 선택해 보세요.")
+    
+    st.markdown("""
+    ### 안녕하세요! AI CRM 대시보드입니다.
+
+    왼쪽 사이드바에서 페이지를 선택하세요.
+
+    - 📊 **대시보드**: 고객 분석 및 AI 인사이트
+    - 🤖 **캠페인 자동화**: AI 기반 이메일 자동화
+    """)
+
+elif menu == "캠페인 자동화":
+    render_campaign_builder()
