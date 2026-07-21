@@ -6,21 +6,54 @@
 import streamlit as st
 import anthropic
 import os
+import pandas as pd
+from datetime import timedelta, datetime
 
 
 def get_dashboard_summary():
-    """대시보드 현재 지표 요약 (Claude에게 넘길 컨텍스트)"""
-    # TODO: 실제 계산된 지표로 교체
-    return """
-    현재 대시보드 지표:
-    - 활성 고객 수: 742명 (전월 대비 +3.2%)
-    - GMV: ₩99.7M (+10.8%)
-    - AOV: ₩37,900 (-0.1%)
-    - 구매 전환율: 6.2% (+13.3%)
-    - 30일 이탈률: 18.4% (+2.1%p 악화)
-    - 이탈 위험 고객: 152명
-    - 휴면 고객: 198명
-    - 장바구니 이탈률: 93.9%
+    """대시보드 현재 지표 요약 (Claude에게 넘길 컨텍스트) - 실제 CSV 기반 계산"""
+    users = pd.read_csv("data/users.csv")
+    orders = pd.read_csv("data/orders.csv")
+    events = pd.read_csv("data/events.csv")
+
+    orders["order_date"] = pd.to_datetime(orders["order_date"])
+
+    # 기준일: 데이터 안 가장 최근 주문일
+    latest_date = orders["order_date"].max()
+    last_30d = latest_date - timedelta(days=30)
+    last_60d = latest_date - timedelta(days=60)
+
+    # 전체 고객 / 최근 30일 활성 고객
+    total_users = users["user_id"].nunique()
+    active_users_30d = orders[orders["order_date"] >= last_30d]["user_id"].nunique()
+
+    # GMV / AOV
+    gmv = orders["total_amount"].sum()
+    order_count = len(orders)
+    aov = gmv / order_count if order_count > 0 else 0
+
+    # 구매 전환율: (구매 유저 수) / (전체 방문 유저 수)
+    purchase_users = events[events["event_type"] == "purchase"]["user_id"].nunique()
+    all_visitor_users = events["user_id"].nunique()
+    conversion_rate = (purchase_users / all_visitor_users * 100) if all_visitor_users > 0 else 0
+
+    # 장바구니 이탈률: 담기만 하고 구매 안 한 비율
+    cart_users = events[events["event_type"] == "add_to_cart"]["user_id"].nunique()
+    cart_abandon_rate = (1 - purchase_users / cart_users) * 100 if cart_users > 0 else 0
+
+    # 휴면 고객: 마지막 주문이 60일 이상 지난 고객
+    last_order_per_user = orders.groupby("user_id")["order_date"].max()
+    dormant_users = (last_order_per_user < last_60d).sum()
+
+    return f"""
+    현재 대시보드 지표 (데이터 기준일: {latest_date.date()}):
+    - 전체 가입 고객 수: {total_users}명
+    - 최근 30일 활성 고객 수: {active_users_30d}명
+    - GMV(총 거래액): ₩{gmv:,.0f}
+    - AOV(평균 주문 금액): ₩{aov:,.0f}
+    - 구매 전환율: {conversion_rate:.1f}%
+    - 장바구니 이탈률: {cart_abandon_rate:.1f}%
+    - 휴면 고객(60일 이상 미주문): {dormant_users}명
     """
 
 
@@ -30,13 +63,21 @@ def run_ai_analysis(summary):
 
     with client.messages.stream(
         model="claude-sonnet-4-6",
-        max_tokens=1000,
+        max_tokens=500,
         system="""당신은 이커머스 CRM 분석 전문가입니다.
-주어진 대시보드 데이터를 분석해서 핵심 이슈와 권장 액션을 한국어로 작성하세요.
-형식:
-1. 가장 시급한 문제 1가지
-2. 긍정적인 신호 1가지
-3. 권장 액션 2가지""",
+주어진 대시보드 데이터를 분석해서, 실무자가 대시보드 하단에서 바로 읽을 수 있는
+짧고 임팩트 있는 인사이트를 한국어로 작성하세요.
+
+규칙:
+- 전체 2~3문장, 하나의 짧은 문단으로 작성
+- 가장 시급한 문제 1가지를 중심으로 서술
+- 핵심 수치나 세그먼트명은 [대괄호]로 강조 표시
+- 표, 이모지, 번호 매기기 사용 금지
+- 마지막 문장은 권장 액션 1가지로 마무리
+
+예시 톤: "이달 가장 시급한 이슈는 [이탈 위험 고객] 증가입니다. 특히 [할인 선호] 세그먼트에서
+집중 발생 중이며 마지막 구매로부터 평균 [47일] 경과했습니다. [리마인드 쿠폰 캠페인]이
+즉시 필요한 상황입니다.\"""",
         messages=[
             {"role": "user", "content": f"다음 데이터를 분석해주세요:\n{summary}"}
         ]
@@ -47,16 +88,39 @@ def run_ai_analysis(summary):
 
 def render_ai_panel():
     """AI 인사이트 패널 - Dashboard.py에서 호출"""
-    st.subheader("🤖 AI 인사이트")
 
-    col1, col2 = st.columns([3, 1])
-    with col2:
-        analyze_btn = st.button("AI 분석 실행", type="primary", use_container_width=True)
+    # 세션 상태 초기화 (최초 1회만 자동 분석, 이후엔 저장된 결과 재사용)
+    if "ai_insight_result" not in st.session_state:
+        st.session_state.ai_insight_result = None
+        st.session_state.ai_insight_time = None
 
-    with col1:
-        result_placeholder = st.empty()
+    header_col1, header_col2 = st.columns([3, 2])
+    with header_col1:
+        st.subheader("🤖 AI 인사이트")
+    with header_col2:
+        if st.session_state.ai_insight_result:
+            st.markdown(
+                f"""
+                <div style="text-align: right; margin-top: 22px;">
+                    <span style="
+                        display: inline-block;
+                        white-space: nowrap;
+                        background-color: #EEF2FF;
+                        color: #4F46E5;
+                        padding: 4px 14px;
+                        border-radius: 999px;
+                        font-size: 13px;
+                        font-weight: 500;
+                    ">✨ Claude AI · {st.session_state.ai_insight_time}</span>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
 
-    if analyze_btn:
+    result_placeholder = st.empty()
+
+    def run_and_store():
+        """분석 실행 후 결과를 session_state에 저장"""
         summary = get_dashboard_summary()
         with result_placeholder.container():
             with st.spinner("Claude가 데이터를 분석하고 있습니다..."):
@@ -65,5 +129,23 @@ def render_ai_panel():
                 for chunk in run_ai_analysis(summary):
                     full_response += chunk
                     response_placeholder.markdown(full_response)
+        st.session_state.ai_insight_result = full_response
+        st.session_state.ai_insight_time = datetime.now().strftime("%H:%M 분석")
+
+    # 최초 진입: 자동으로 한 번 분석 실행
+    if st.session_state.ai_insight_result is None:
+        run_and_store()
+        st.rerun()  # 배지를 표시하기 위해 한 번 새로고침
     else:
-        result_placeholder.info("'AI 분석 실행' 버튼을 클릭하면 현재 데이터를 기반으로 인사이트를 생성합니다.")
+        # 저장된 결과 재사용 (API 재호출 없음)
+        result_placeholder.markdown(st.session_state.ai_insight_result)
+
+    # 재분석 버튼 + 캠페인 이동 버튼
+    btn_col1, btn_col2 = st.columns([1, 3])
+    with btn_col1:
+        if st.button("🔄 다시 분석하기"):
+            run_and_store()
+            st.rerun()
+    with btn_col2:
+        if st.button("🚨 이탈 위험 캠페인 만들기", type="secondary"):
+            st.switch_page("pages/2_Campaigns.py")
