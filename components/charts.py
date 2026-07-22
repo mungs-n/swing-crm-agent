@@ -8,6 +8,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
 
+from utils.rfm import calculate_rfm, assign_segment
 
 from utils.rfm import calculate_rfm, assign_segment
 
