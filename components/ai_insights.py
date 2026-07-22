@@ -306,4 +306,4 @@ def render_ai_panel():
             st.rerun()
     with btn_col2:
         if st.button("🚨 이탈 위험 캠페인 만들기", type="secondary"):
-            st.switch_page("pages/2_Campaigns.py")
+            st.switch_page("pages/2_Campaign.py")
