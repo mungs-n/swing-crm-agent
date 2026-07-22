@@ -1,9 +1,10 @@
 """
 담당자: 탭1 AI 인사이트 담당
-작업 내용: Claude API 연동, AI 인사이트 패널, Tool Use 구현
+작업 내용: Claude API 연동, AI 인사이트 패널, RFM/코호트 상세 분석 통합
 """
 
 import streamlit as st
+import plotly.graph_objects as go
 import anthropic
 import os
 import pandas as pd
@@ -57,8 +58,71 @@ def get_dashboard_summary():
     """
 
 
+def recommend_segment(users: pd.DataFrame, orders: pd.DataFrame, events: pd.DataFrame) -> str:
+    """실제 지표값을 기준으로 탭3 PERSONAS 키 중 하나를 규칙 기반으로 추천한다.
+
+    주의: AI가 생성한 자유 텍스트를 파싱하지 않는다 — Claude의 응답 문구는
+    매번 표현이 달라질 수 있어 세그먼트명이 PERSONAS 키와 정확히 일치한다는
+    보장이 없기 때문이다. 대신 이미 계산된 지표(미구매 경과일, 신규 가입 여부,
+    쿠폰 사용률 등)를 기준으로 파이썬이 직접 6개 키 중 하나를 결정한다.
+
+    아래 임계값(45일/90일/30일 등)은 PERSONAS 딕셔너리의 설명 문구를 그대로
+    가져온 값이다. 실제 팀 기준이 따로 있다면 그 값으로 조정하면 된다.
+    """
+    orders = orders.copy()
+    users = users.copy()
+    orders["order_date"] = pd.to_datetime(orders["order_date"])
+    users["signup_date"] = pd.to_datetime(users["signup_date"])
+
+    latest_date = orders["order_date"].max()
+    total_users = users["user_id"].nunique()
+
+    # 유저별 경과일 (한 번도 구매하지 않은 유저도 포함 — compute_recency_days 참고)
+    recency_days = compute_recency_days(users, orders)
+    dormant_count = (recency_days >= 90).sum()                              # 휴면 고객 (90일+)
+    at_risk_count = ((recency_days >= 45) & (recency_days < 90)).sum()      # 이탈 위험 (45~90일)
+
+    # 신규 가입자(30일 이내) 중 구매 전환율
+    new_users = users[(latest_date - users["signup_date"]).dt.days <= 30]
+    new_user_ids = set(new_users["user_id"])
+    new_user_purchasers = orders[orders["user_id"].isin(new_user_ids)]["user_id"].nunique()
+    new_user_purchase_rate = (
+        new_user_purchasers / len(new_users) if len(new_users) > 0 else 1.0
+    )
+
+    # 장바구니 이탈률
+    cart_users = events[events["event_type"] == "add_to_cart"]["user_id"].nunique()
+    purchase_users = events[events["event_type"] == "purchase"]["user_id"].nunique()
+    cart_abandon_rate = (1 - purchase_users / cart_users) * 100 if cart_users > 0 else 0
+
+    # 쿠폰 사용률 (할인 민감도)
+    coupon_rate = orders["coupon_used"].mean() * 100 if "coupon_used" in orders.columns else 0
+
+    # 재구매율 (충성도)
+    repeat_purchase_rate = compute_repeat_purchase_rate(orders)
+
+    # --- 우선순위 규칙: 가장 심각/시급한 문제부터 확인 ---
+    if dormant_count >= total_users * 0.15:
+        return "휴면 고객"
+    if at_risk_count >= total_users * 0.10:
+        return "이탈 위험 고객"
+    if len(new_users) > 0 and new_user_purchase_rate < 0.3:
+        return "신규 탐색자"
+    if cart_abandon_rate >= 45:
+        return "이탈 위험 고객"
+    if coupon_rate >= 50:
+        return "할인 구매자"
+    if repeat_purchase_rate >= 70:
+        return "브랜드 충성 고객"
+    return "충동 구매자"
+
+
+# ---------------------------------------------------------
+# Claude API 호출
+# ---------------------------------------------------------
+
 def run_ai_analysis(summary):
-    """Claude API 호출해서 인사이트 생성"""
+    """Claude API 호출해서 인사이트 생성 (컨설팅 리포트 형식)"""
     client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
     with client.messages.stream(
@@ -85,6 +149,100 @@ def run_ai_analysis(summary):
         for text in stream.text_stream:
             yield text
 
+        # 스트림 종료 후, 토큰 한도 때문에 응답이 잘렸는지 확인
+        final_message = stream.get_final_message()
+        if final_message.stop_reason == "max_tokens":
+            yield "\n\n> ⚠️ 응답 길이 제한으로 내용이 일부 잘렸습니다. '다시 분석하기'를 눌러주세요."
+
+
+# ---------------------------------------------------------
+# 상세 분석: RFM 산포도 + 코호트 리텐션 히트맵
+# ---------------------------------------------------------
+
+def render_rfm_scatter(rfm: pd.DataFrame):
+    fig = go.Figure(
+        data=go.Scatter(
+            x=rfm["frequency"],
+            y=rfm["monetary"],
+            mode="markers",
+            marker=dict(
+                size=rfm["monetary"],
+                sizemode="area",
+                sizeref=2.0 * rfm["monetary"].max() / (40.0 ** 2),
+                sizemin=4,
+                color=rfm["recency"],
+                colorscale="RdYlBu",
+                colorbar=dict(title="최근성(일)"),
+                line=dict(width=0.5, color="rgba(0,0,0,0.2)"),
+                opacity=0.85,
+            ),
+            hovertemplate=(
+                "구매 빈도: %{x}<br>"
+                "누적 구매액: ₩%{y:,.0f}<br>"
+                "최근성: %{marker.color}일<extra></extra>"
+            ),
+        )
+    )
+    fig.update_layout(
+        xaxis_title="구매 빈도",
+        yaxis_title="누적 구매액",
+        margin=dict(l=10, r=10, t=10, b=10),
+        height=440,
+        plot_bgcolor="white",
+    )
+    fig.update_xaxes(showgrid=False, zeroline=False)
+    fig.update_yaxes(showgrid=True, gridcolor="rgba(0,0,0,0.06)", zeroline=False)
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_cohort_heatmap(retention: pd.DataFrame):
+    x_labels = [f"{c}개월차" for c in retention.columns]
+    y_labels = [str(p) for p in retention.index]
+
+    text = retention.round(1).astype(str) + "%"
+    text = text.where(retention.notna(), "")
+
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=retention.values,
+            x=x_labels,
+            y=y_labels,
+            text=text.values,
+            texttemplate="%{text}",
+            textfont=dict(size=12, color="white"),
+            colorscale="YlOrRd",
+            hoverongaps=False,
+            colorbar=dict(title=""),
+            xgap=3,
+            ygap=3,
+        )
+    )
+    fig.update_layout(
+        margin=dict(l=10, r=10, t=10, b=10),
+        height=440,
+        yaxis=dict(autorange="reversed"),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_detail_analysis():
+    """RFM 산포도 + 코호트 리텐션 히트맵을 나란히 표시"""
+    users, orders, events = load_data()
+    rfm = compute_rfm(orders)
+    retention = compute_cohort_retention(users, orders)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**RFM 산포도**")
+        render_rfm_scatter(rfm)
+    with col2:
+        st.markdown("**코호트 리텐션 히트맵**")
+        render_cohort_heatmap(retention)
+
+
+# ---------------------------------------------------------
+# 메인 패널 (AI 인사이트 + 상세 분석 통합)
+# ---------------------------------------------------------
 
 def render_ai_panel():
     """AI 인사이트 패널 - Dashboard.py에서 호출"""
