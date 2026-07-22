@@ -116,8 +116,8 @@ PERSONAS = {
 
 PERSONA_MAP = {
     "신규 탐색자": "new_explorer",
-    "충동 구매자": "impulse_buyer",
-    "할인 구매자": "discount_seeker",
+    "충동 구매자": "impulsive_buyer",
+    "할인 구매자": "discount_hunter",
     "브랜드 충성 고객": "brand_loyalist", 
     "이탈 위험 고객": "churn_risk",
     "휴면 고객": "dormant"
