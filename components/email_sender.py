@@ -12,6 +12,20 @@ from datetime import datetime
 
 
 HISTORY_FILE = "data/campaign_history.csv"
+TEST_RECIPIENTS_FILE = "data/test_recipients.csv"
+
+
+def load_test_recipients():
+    """
+    실제 발송 테스트용 수신자 목록 불러오기.
+    가상 고객 데이터에는 실제 이메일이 없기 때문에,
+    팀원들의 실제 이메일 몇 개를 data/test_recipients.csv 에 등록해두고
+    '전체 발송' 시 이 목록으로 실제 발송한다.
+    """
+    try:
+        return pd.read_csv(TEST_RECIPIENTS_FILE)
+    except FileNotFoundError:
+        return pd.DataFrame(columns=["name", "email"])
 
 
 def send_email(to_email, subject, body):
@@ -43,7 +57,8 @@ def save_history(segment, copy, count, status):
         df = pd.DataFrame(columns=new_row.keys())
 
     df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-    df.to_csv(HISTORY_FILE, index=False)
+    # utf-8-sig로 저장해야 엑셀에서 열었을 때 한글이 깨지지 않음
+    df.to_csv(HISTORY_FILE, index=False, encoding="utf-8-sig")
 
 
 def render_email_sender():
@@ -84,8 +99,45 @@ def render_email_sender():
 
     with col2:
         if st.button(f"🚀 전체 발송 ({count}명)", use_container_width=True, type="primary"):
-            # 실제 발송은 데이터에서 이메일 목록 가져와서 반복
-            st.warning("전체 발송 기능은 실제 이메일 목록 연동 후 활성화됩니다.")
+            recipients = load_test_recipients()
+
+            if recipients.empty:
+                st.warning(
+                    "data/test_recipients.csv 에 등록된 테스트 수신자가 없습니다. "
+                    "name,email 컬럼으로 팀원 이메일을 등록해주세요."
+                )
+            else:
+                lines = copy.split("\n")
+                subject = lines[0].replace("제목: ", "").strip()
+                body = "\n".join(lines[2:]).replace("본문: ", "").strip()
+
+                success_count = 0
+                fail_count = 0
+                total = len(recipients)
+                progress_bar = st.progress(0)
+
+                for i, row in recipients.iterrows():
+                    try:
+                        status = send_email(row["email"], subject, body)
+                        if status == 202:
+                            success_count += 1
+                        else:
+                            fail_count += 1
+                    except Exception:
+                        fail_count += 1
+                    progress_bar.progress((i + 1) / total)
+
+                st.success(
+                    f"✅ 전체 발송 완료: 테스트 수신자 {total}명 중 {success_count}명 성공"
+                    f"{f', {fail_count}명 실패' if fail_count else ''} "
+                    f"(실제 서비스 기준 대상 세그먼트: {count}명)"
+                )
+                save_history(
+                    segment,
+                    copy,
+                    total,
+                    f"전체 발송 완료 (테스트 {total}명 중 {success_count}명 성공)"
+                )
 
     # 발송 이력
     st.subheader("📋 발송 이력")

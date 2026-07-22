@@ -26,10 +26,39 @@ load_dotenv()
 def get_customer_from_events(target_user_id=None):
     """경로 에러 방지를 위해 상대 경로 및 예외 처리 적용"""
     # 1. 상대 경로를 기본으로 설정 (동일 폴더 또는 data 폴더 탐색)
+    possible_user_paths = ["users.csv", "data/users.csv"]
+    user_csv_path = None
+    for p in possible_user_paths:
+        if os.path.exists(p):
+            user_csv_path = p
+            break
+
+    real_name = None
+    if user_csv_path:
+        try: 
+            df_users = pd.read_csv(user_csv_path)
+            df_users['user_id'] = df_users['user_id'].astype(str)
+           
+            if target_user_id:
+                str_target_id = str(target_user_id).strip()
+                user_match = df_users[
+                    (df_users['user_id'] == str_target_id) |
+                    (df_users['user_id'].str.startswith(str_target_id))
+                ]
+                if not user_match.empty and 'name' in user_match.columns:
+                    real_name = user_match.iloc[0]['name']
+            else:
+                if not df_users.empty and 'name' in df_users.columns:
+                    real_name = df_users.iloc[0]['name']
+                    target_user_id = df_users.iloc[0]['user_id']
+        except Exception:
+            pass
+
+
+
     possible_paths = [
         "events.csv",
-        "data/events.csv",
-        r"C:/Users/이주현/OneDrive/Documents/카카오톡 받은 파일/events.csv"
+        "data/events.csv"
     ]
     
     csv_path = None
@@ -41,7 +70,7 @@ def get_customer_from_events(target_user_id=None):
     # 파일이 없는 경우 기본 더미 데이터 반환 (화면 다운 방지)
     if not csv_path:
         return {
-            'name': target_user_id or '고객님',
+            'name': real_name,
             'recently_viewed': '아우터 (상품 ID: 6071ce)',
             'cart_items': ['레깅스(1a330a)', '조거팬츠(7b65c9)'],
             'recent_purchase': '스윔웨어 (상품 ID: 99eaa9)'
@@ -67,7 +96,7 @@ def get_customer_from_events(target_user_id=None):
         recent_purchase = f"{purchases.iloc[0]['category']} (상품 ID: {purchases.iloc[0]['product_id']})" if not purchases.empty else '없음'
 
         return {
-            'name': f"고객({str(target_user_id)[:6]})",
+            'name': f"({real_name})",
             'recently_viewed': recently_viewed,
             'cart_items': cart_items,
             'recent_purchase': recent_purchase
@@ -85,8 +114,27 @@ PERSONAS = {
     "휴면 고객": {"count": 150, "desc": ["90일 이상 미방문", "윈백 캠페인 대상", "다시 돌아오면 제공되는 혜택", "강렬한 한 줄 소구로 극적인 이메일 제목"]},
 }
 
+PERSONA_MAP = {
+    "신규 탐색자": "new_explorer",
+    "충동 구매자": "impulse_buyer",
+    "할인 구매자": "discount_seeker",
+    "브랜드 충성 고객": "brand_loyalist", 
+    "이탈 위험 고객": "churn_risk",
+    "휴면 고객": "dormant"
+}
 
-def generate_email_copy(segment: str, persona_desc: list, customer: dict):
+def get_customers_by_persona(persona_kr, users_csv="users.csv"): 
+    """선택한 페르소나에 속한 전체 고객 목록 추출"""
+    persona_en = PERSONA_MAP.get(persona_kr)
+    if os.path.exists(users_csv):
+        df_users = pd.read_csv(users_csv)
+        filtered = df_users[df_users['persona_type'] == persona_en]
+        return filtered.to_dict('records')
+    return []
+
+def generate_single_copy(segment_kr: str, persona_desc: list, customer_info: dict):
+    """고객 각각에 대한 개별 카피 생성"""
+    
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         yield "⚠️ ANTHROPIC_API_KEY가 설정되지 않았습니다. .env 파일을 확인해주세요."
@@ -96,28 +144,30 @@ def generate_email_copy(segment: str, persona_desc: list, customer: dict):
 
     k = min(len(persona_desc), random.randint(1, 2))
     chosen_traits = random.sample(persona_desc, k)
+    customer_name = customer_info.get('name', '고객님')
 
     with client.messages.stream(
         model="claude-sonnet-4-6",
         max_tokens=500,
         system=f"""당신은 20~30대 여성에게 인기가 가장 많은 스포츠 웨어 브랜드의 마케팅 카피라이터입니다.
-        1. 이번 메일에서 반영할 소구 포인트는 아래로 한정합니다. 다른 특성은 언급하지 마세요. - {chosen_traits}
-        2. 구체적인 숫자, 시간, 혜택 디테일을 반영하여 작성하세요.
-        3. 아래 고객 데이터 중 최소 1개 이상을 본문에 자연스럽게 포함시켜 이 사람만을 위한 메일인 것처럼 작성하세요. 
-        4. 주어진 고객 세그먼트 특성에 맞는 개인화 이메일을 한국어로 작성하세요.
+        1. [필수] 이메일 첫 줄에 반드시 고객 이름("{customer_name}")을 자연스럽게 언급하세요.
+        2. 이번 메일에서 반영할 소구 포인트는 아래로 한정합니다. 다른 특성은 언급하지 마세요. - {chosen_traits}
+        3. 구체적인 숫자, 시간, 혜택 디테일을 반영하여 작성하세요.
+        4. 아래 고객 데이터 중 최소 1개 이상을 본문에 자연스럽게 포함시켜 이 사람만을 위한 메일인 것처럼 작성하세요. 
+        5. 주어진 고객 세그먼트 특성에 맞는 개인화 이메일을 한국어로 작성하세요.
     형식:
     제목: (15자 내외)
     본문: (2-3문장)""",
         messages=[{
             "role": "user",
-            "content": f"""세그먼트: {segment}
-    고객 이름: {customer.get('name', '고객')}
-    최근 열람 상품: {customer.get('recently_viewed', '없음')}
-    장바구니: {', '.join(customer.get('cart_items', [])) if customer.get('cart_items') else '없음'}
-    최근 구매: {customer.get('recent_purchase', '없음')}
+            "content": f"""세그먼트: {segment_kr}
+    고객 이름: {customer_name}
+    최근 열람 상품: {customer_info.get('recently_viewed', '없음')}
+    장바구니: {', '.join(customer_info.get('cart_items', [])) if customer_info.get('cart_items') else '없음'}
+    최근 구매: {customer_info.get('recent_purchase', '없음')}
     특성: {', '.join(chosen_traits)}
 
-    위 정보를 반영해 이메일을 작성해주세요. """
+    위 {customer_name}의 행동 정보를 자연스럽게 반영해 맞춤형 이메일을 작성해주세요. """
         }]
     ) as stream:
         for text in stream.text_stream:
@@ -125,7 +175,7 @@ def generate_email_copy(segment: str, persona_desc: list, customer: dict):
 
 
 def render_campaign_builder():
-    st.subheader("📋 캠페인 설정")
+    st.subheader("📋 캠페인 카피 생성")
 
     col1, col2 = st.columns(2)
 
@@ -153,13 +203,34 @@ def render_campaign_builder():
 
     if generate_btn:
         st.subheader("생성된 메시지")
+        
+        # 1. users.csv에서 선택한 세그먼트(페르소나)에 맞는 유저 목록 가져오기
+        selected_user_id = None
+        try:
+            user_path = "users.csv" if os.path.exists("users.csv") else "data/users.csv"
+            if os.path.exists(user_path):
+                df_u = pd.read_csv(user_path)
+                
+                # 선택된 세그먼트로 유저 필터링
+                filtered_users = df_u[df_u['persona_type'] == selected_segment]
+                
+                # 해당 세그먼트 유저 중 1명을 무작위(랜덤) 추출!
+                if not filtered_users.empty:
+                    selected_user_id = random.choice(filtered_users['user_id'].tolist())
+                else:
+                    selected_user_id = random.choice(df_u['user_id'].tolist())
+        except Exception as e:
+            pass
+
+        # 2. ★ 추출한 랜덤 target_user_id를 넘겨서 해당 고객의 실제 정보 가져오기
+        customer_data = get_customer_from_events(target_user_id=selected_user_id)
+
+        # 3. Claude 카피 생성
         with st.spinner("Claude가 카피를 작성하고 있습니다..."):
             full_response = ""
             placeholder = st.empty()
 
-            customer_data = get_customer_from_events()
-
-            for chunk in generate_email_copy(selected_segment, persona_info['desc'], customer_data):
+            for chunk in generate_single_copy(selected_segment, persona_info['desc'], customer_data):
                 full_response += chunk
                 placeholder.markdown(full_response + "▌")
 
