@@ -10,13 +10,6 @@ import pandas as pd
 import os
 import random
 
-# ★ 1. 페이지 설정은 무조건 코드 최상단에 배치
-st.set_page_config(
-    page_title="AI CRM Dashboard",
-    page_icon="📊",
-    layout="wide"
-)
-
 load_dotenv()
 
 # ==========================================
@@ -239,33 +232,3 @@ def render_campaign_builder():
         st.session_state["generated_copy"] = full_response
         st.session_state["selected_segment"] = selected_segment
         st.session_state["target_count"] = persona_info["count"]
-
-
-# ==========================================
-# [메인 대시보드 UI 및 네비게이션]
-# ==========================================
-
-st.title("📊 AI CRM Dashboard")
-st.markdown("---")
-
-st.sidebar.title("사이드바")
-menu = st.sidebar.radio(
-    "이동할 페이지를 선택하세요.",
-    ["대시보드", "캠페인 자동화"]
-)
-
-if menu == "대시보드":
-    st.header("🎯 CRM 마케팅 대시보드 홈")
-    st.write("오신 것을 환영합니다! 왼쪽 사이드바 메뉴에서 원하는 기능을 선택해 보세요.")
-    
-    st.markdown("""
-    ### 안녕하세요! AI CRM 대시보드입니다.
-
-    왼쪽 사이드바에서 페이지를 선택하세요.
-
-    - 📊 **대시보드**: 고객 분석 및 AI 인사이트
-    - 🤖 **캠페인 자동화**: AI 기반 이메일 자동화
-    """)
-
-elif menu == "캠페인 자동화":
-    render_campaign_builder()
