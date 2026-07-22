@@ -1,7 +1,6 @@
 import streamlit as st
 
 from components.charts import render_charts
-from components.ai_insights import render_ai_panel
 
 st.set_page_config(
     page_title="대시보드 - AI CRM",
@@ -12,5 +11,3 @@ st.set_page_config(
 
 st.title("대시보드")
 render_charts()
-st.markdown("---")
-render_ai_panel()
