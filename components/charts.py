@@ -10,6 +10,8 @@ import pandas as pd
 
 from utils.rfm import calculate_rfm, assign_segment
 
+from utils.rfm import calculate_rfm, assign_segment
+
 ACCENT = "#4C6EF5"
 PALE_BLUE = "#BAC8FF"
 POSITIVE = "#2F9E44"
