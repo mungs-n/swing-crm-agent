@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 import streamlit as st
 
 st.set_page_config(
@@ -17,4 +20,4 @@ st.markdown("""
 
 - 📊 **대시보드**: 고객 분석 및 AI 인사이트
 - 🤖 **캠페인 자동화**: AI 기반 이메일 자동화
-""") 
+""")
