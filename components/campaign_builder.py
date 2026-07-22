@@ -109,8 +109,8 @@ PERSONAS = {
 
 PERSONA_MAP = {
     "신규 탐색자": "new_explorer",
-    "충동 구매자": "impulse_buyer",
-    "할인 구매자": "discount_seeker",
+    "충동 구매자": "impulsive_buyer",
+    "할인 구매자": "discount_hunter",
     "브랜드 충성 고객": "brand_loyalist", 
     "이탈 위험 고객": "churn_risk",
     "휴면 고객": "dormant"
@@ -204,8 +204,9 @@ def render_campaign_builder():
             if os.path.exists(user_path):
                 df_u = pd.read_csv(user_path)
                 
-                # 선택된 세그먼트로 유저 필터링
-                filtered_users = df_u[df_u['persona_type'] == selected_segment]
+                # 선택된 세그먼트(한글)를 persona_type 컬럼값(영어)으로 변환해서 필터링
+                selected_persona_en = PERSONA_MAP.get(selected_segment)
+                filtered_users = df_u[df_u['persona_type'] == selected_persona_en]
                 
                 # 해당 세그먼트 유저 중 1명을 무작위(랜덤) 추출!
                 if not filtered_users.empty:
