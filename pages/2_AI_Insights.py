@@ -2,13 +2,5 @@ import streamlit as st
 
 from components.ai_insights import render_ai_panel
 
-st.set_page_config(
-    page_title="AI 인사이트 - ATHLEPA CRM",
-    page_icon="assets/athlepa_logo.svg",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-st.logo("assets/athlepa_logo.svg", size="large")
-
-st.title("AI 인사이트")
+st.title("고객 분석")
 render_ai_panel()

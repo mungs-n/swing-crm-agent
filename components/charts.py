@@ -48,6 +48,25 @@ div[class*="st-key-card-"]:hover {
 div[data-testid="stHeadingWithActionElements"] h3 {
     font-size: 1.25rem !important;
 }
+/* 사이드바 기간 필터의 "최근 7일" 등 라디오 옵션 글씨 크기 축소 */
+section[data-testid="stSidebar"] div[role="radiogroup"] p {
+    font-size: 13px !important;
+}
+/* 본문 상하 여백과 요소 사이 간격을 줄여서 한 탭 안의 차트가 스크롤 없이 더 잘 들어오도록 함 */
+div[data-testid="stMainBlockContainer"] {
+    padding-top: 2rem !important;
+    padding-bottom: 1rem !important;
+}
+div[data-testid="stMain"] div[data-testid="stVerticalBlock"] {
+    gap: 0.6rem !important;
+}
+div[data-testid="stMain"] h1 {
+    margin-bottom: 0 !important;
+}
+div[data-testid="stHeadingWithActionElements"] {
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+}
 </style>
 """
 
@@ -92,6 +111,17 @@ def _pct_delta(current, previous):
     if not previous:
         return 0.0
     return (current - previous) / previous * 100
+
+
+def _fmt_duration(minutes):
+    """분 단위 소요시간을 사람이 읽기 좋은 단위(분/시간/일)로 표시"""
+    if pd.isna(minutes):
+        return "-"
+    if minutes >= 1440:
+        return f"{minutes / 1440:.1f}일"
+    if minutes >= 60:
+        return f"{minutes / 60:.1f}시간"
+    return f"{minutes:.0f}분"
 
 
 def compute_kpis(cur_orders, cur_events, prev_orders, prev_events):
@@ -155,12 +185,11 @@ def render_kpi_cards(orders, events, prev_orders, prev_events):
 
 def render_gmv_chart(orders, granularity="월별"):
     """GMV & 주문 수 추이 콤보 차트 (상단 전역 필터의 기간/단위를 그대로 사용, 최신 구간만 강조색)"""
-    st.subheader(
-        "GMV & 주문 수 추이",
-        help="막대는 구간별 GMV(총매출), 선은 주문 건수예요. 진한 파란 막대는 가장 최근 구간이고 나머지는 이전 구간이에요.",
-    )
-
     if orders.empty:
+        st.subheader(
+            "GMV & 주문 수 추이",
+            help="막대는 구간별 GMV(총매출), 선은 주문 건수예요. 진한 파란 막대는 가장 최근 구간이고 나머지는 이전 구간이에요.",
+        )
         st.info("선택한 기간에 데이터가 없습니다.")
         return
 
@@ -175,6 +204,11 @@ def render_gmv_chart(orders, granularity="월별"):
     )
     grouped["label"] = grouped["order_date"].dt.strftime(label_fmt)
     bar_colors = [ACCENT if i == len(grouped) - 1 else PALE_BLUE for i in range(len(grouped))]
+
+    st.subheader(
+        "GMV & 주문 수 추이",
+        help="막대는 구간별 GMV(총매출), 선은 주문 건수예요. 진한 파란 막대는 가장 최근 구간이고 나머지는 이전 구간이에요.",
+    )
 
     fig = go.Figure()
     fig.add_bar(
@@ -193,6 +227,7 @@ def render_gmv_chart(orders, granularity="월별"):
         )
     )
     fig.update_layout(
+        height=260,
         yaxis=dict(title="GMV (원)"),
         yaxis2=dict(title="주문 수", overlaying="y", side="right"),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
@@ -201,6 +236,21 @@ def render_gmv_chart(orders, granularity="월별"):
         hovermode="x unified",
     )
     st.plotly_chart(fig, width='stretch')
+
+
+def _data_view_button(data, label="원본 데이터 보기"):
+    """탭 상단에 배치하는 원본 데이터 보기 버튼. data는 DataFrame 하나 또는 {구분 라벨: DataFrame} 형태로 여러 개 전달 가능
+    (팝오버로 뜨는 표 우측 상단 메뉴에서 CSV 다운로드도 가능). 팝오버 자체는 버튼 크기에 맞춰 작게 시작하지만,
+    안의 표에 고정 픽셀 너비를 줘서 옆으로 드래그하지 않고도 여러 컬럼이 한눈에 보이도록 넓게 펼침"""
+    with st.popover(label):
+        if isinstance(data, dict):
+            for i, (name, df) in enumerate(data.items()):
+                if i > 0:
+                    st.markdown("---")
+                st.caption(name)
+                st.dataframe(df, width=850, hide_index=True)
+        else:
+            st.dataframe(data, width=850, hide_index=True)
 
 
 def _render_ranked_bars(title, series, colors=None, value_fmt=None, icon=None):
@@ -239,7 +289,7 @@ def _render_ranked_bars(title, series, colors=None, value_fmt=None, icon=None):
         )
     )
     fig.update_layout(
-        height=34 * len(data) + 50,
+        height=26 * len(data) + 34,
         margin=dict(l=10, r=70, t=10, b=10),
         xaxis=dict(visible=False, range=[0, data.values.max() * 1.2]),
         plot_bgcolor="rgba(0,0,0,0)",
@@ -277,11 +327,11 @@ def render_gender_split(users):
                 showlegend=False,
             )
         )
-        fig.update_layout(height=160, margin=dict(t=10, b=10, l=10, r=10))
+        fig.update_layout(height=130, margin=dict(t=10, b=10, l=10, r=10))
         st.plotly_chart(fig, width='stretch', config={"displayModeBar": False})
     with col_labels:
         st.markdown(
-            "<div style='display:flex;flex-direction:column;justify-content:center;height:160px;gap:18px'>"
+            "<div style='display:flex;flex-direction:column;justify-content:center;height:130px;gap:14px'>"
             f"<div><span style='color:{MALE_COLOR};font-weight:700'>남성</span><br>"
             f"<span style='font-size:1.3rem;font-weight:700'>{male:,}명</span> "
             f"<span style='color:#868E96'>({male / total * 100:.0f}%)</span></div>"
@@ -376,7 +426,7 @@ def render_category_ranking(orders):
         )
     )
     fig.update_layout(
-        height=320,
+        height=230,
         margin=dict(l=10, r=10, t=20, b=10),
         yaxis=dict(visible=False, range=[0, data.values.max() * 1.2]),
         plot_bgcolor="rgba(0,0,0,0)",
@@ -394,8 +444,9 @@ def render_channel_ranking(users, orders):
 
 def render_rfm_scatter(orders):
     """RFM 산포도 (버블 차트) - x:구매빈도, y:구매금액, color:최근성"""
-    st.subheader("RFM 산포도")
     rfm = assign_segment(calculate_rfm(orders.copy()))
+
+    st.subheader("RFM 산포도")
 
     fig = px.scatter(
         rfm,
@@ -407,13 +458,13 @@ def render_rfm_scatter(orders):
         color_continuous_scale="RdYlBu",
         labels={"Frequency": "구매 빈도", "Monetary": "구매 금액", "Recency": "최근성(일)"},
     )
-    fig.update_layout(margin=dict(t=30))
+    fig.update_layout(height=320, margin=dict(t=30))
     st.plotly_chart(fig, width='stretch')
 
 
 def render_funnel(events):
-    """구매 퍼널 차트 (방문 → 상품조회 → 장바구니 → 구매)"""
-    st.subheader("구매 퍼널")
+    """구매 퍼널 (방문 → 상품조회 → 장바구니 → 구매). 각 단계를 막대 하나로 두고, 최초 방문자 수 대비
+    도달 비율만큼 채워서 쌓는 누적(스택) 막대차트로 표시"""
     stages = [
         ("page_view", "방문"),
         ("product_view", "상품조회"),
@@ -421,35 +472,161 @@ def render_funnel(events):
         ("purchase", "구매"),
     ]
     values = [events.loc[events["event_type"] == key, "session_id"].nunique() for key, _ in stages]
+    labels = [label for _, label in stages]
 
     drop_offs = [0.0] + [
         (values[i - 1] - values[i]) / values[i - 1] if values[i - 1] else 0.0 for i in range(1, len(values))
     ]
     worst_idx = max(range(1, len(values)), key=lambda i: drop_offs[i])
 
-    palette = ["#4C6EF5", "#748FFC", "#91A7FF", "#BAC8FF"]
-    bar_colors = [WARNING if i == worst_idx else palette[i] for i in range(len(values))]
+    base = values[0] if values[0] else 1
+    reached_pct = [v / base * 100 for v in values]
+    remaining_pct = [100 - p for p in reached_pct]
+    remaining_colors = [WARNING if i == worst_idx else "#E9ECEF" for i in range(len(values))]
 
-    fig = go.Figure(
-        go.Funnel(
-            y=[label for _, label in stages],
-            x=values,
-            texttemplate="%{value:,} (%{percentInitial})",
-            marker=dict(color=bar_colors),
-        )
+    st.subheader("구매 퍼널")
+
+    fig = go.Figure()
+    fig.add_bar(
+        x=labels,
+        y=reached_pct,
+        name="도달",
+        marker_color=ACCENT,
+        text=[f"{v:,}명 ({p:.1f}%)" for v, p in zip(values, reached_pct)],
+        textposition="inside",
+        hovertemplate="%{x}<br>%{text}<extra></extra>",
     )
-    fig.update_layout(margin=dict(t=30))
+    fig.add_bar(
+        x=labels,
+        y=remaining_pct,
+        name="이탈",
+        marker=dict(color=remaining_colors),
+        hovertemplate="%{x}<br>이탈 %{y:.1f}%<extra></extra>",
+    )
+    fig.update_layout(
+        barmode="stack",
+        height=240,
+        yaxis=dict(title="비율 (%)", range=[0, 100]),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+        margin=dict(t=30),
+        plot_bgcolor="rgba(0,0,0,0)",
+    )
     st.plotly_chart(fig, width='stretch')
+
+    # 단계 전환마다 전환율을 표로 같이 보여줌 (세션 내 이벤트가 같은 시각으로 기록돼 있어 소요시간은 의미가 없어 제외)
+    rows = [
+        {
+            "단계": f"{stages[i - 1][1]} → {stages[i][1]}",
+            "전환율": f"{(values[i] / values[i - 1] * 100) if values[i - 1] else 0.0:.1f}%",
+        }
+        for i in range(1, len(stages))
+    ]
+    st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
+
+
+def render_repeat_funnel(users, orders, start, end):
+    """회원가입 → 첫 구매 → 재구매 퍼널. '기간 필터'에서 고른 기간에 가입한 고객 코호트를 기준으로
+    (가입일이 그 기간에 속하는 고객만), 전체 주문 이력에서 첫 구매·재구매까지 도달했는지 추적"""
+    st.markdown(
+        "<div style='font-size:1.25rem;font-weight:600;margin-bottom:4px'>회원가입 → 첫 구매 → 재구매</div>",
+        unsafe_allow_html=True,
+    )
+    st.caption(f"기간 필터에서 고른 가입일({start} ~ {end}) 기준 고객 코호트를, 이후 전체 주문 이력으로 추적한 결과예요.")
+
+    cohort_users = users[(users["signup_date"].dt.date >= start) & (users["signup_date"].dt.date <= end)]
+    cohort_ids = set(cohort_users["user_id"])
+    if not cohort_ids:
+        st.info("선택한 기간에 가입한 고객이 없습니다.")
+        return
+
+    order_lists = (
+        orders[orders["user_id"].isin(cohort_ids)]
+        .sort_values("order_date")
+        .groupby("user_id")["order_date"]
+        .apply(list)
+    )
+    first_purchase_ids = set(order_lists.index)
+    repeat_ids = {uid for uid, dates in order_lists.items() if len(dates) >= 2}
+
+    labels = ["회원가입", "첫 구매", "재구매"]
+    values = [len(cohort_ids), len(first_purchase_ids), len(repeat_ids)]
+
+    drop_offs = [0.0] + [
+        (values[i - 1] - values[i]) / values[i - 1] if values[i - 1] else 0.0 for i in range(1, len(values))
+    ]
+    worst_idx = max(range(1, len(values)), key=lambda i: drop_offs[i])
+
+    base = values[0] if values[0] else 1
+    reached_pct = [v / base * 100 for v in values]
+    remaining_pct = [100 - p for p in reached_pct]
+    remaining_colors = [WARNING if i == worst_idx else "#E9ECEF" for i in range(len(values))]
+
+    fig = go.Figure()
+    fig.add_bar(
+        x=labels,
+        y=reached_pct,
+        name="도달",
+        marker_color=ACCENT,
+        text=[f"{v:,}명 ({p:.1f}%)" for v, p in zip(values, reached_pct)],
+        textposition="inside",
+        hovertemplate="%{x}<br>%{text}<extra></extra>",
+    )
+    fig.add_bar(
+        x=labels,
+        y=remaining_pct,
+        name="이탈",
+        marker=dict(color=remaining_colors),
+        hovertemplate="%{x}<br>이탈 %{y:.1f}%<extra></extra>",
+    )
+    fig.update_layout(
+        barmode="stack",
+        height=240,
+        yaxis=dict(title="비율 (%)", range=[0, 100]),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+        margin=dict(t=30),
+        plot_bgcolor="rgba(0,0,0,0)",
+    )
+    st.plotly_chart(fig, width='stretch')
+
+    # 회원가입 -> 첫 구매, 첫 구매 -> 재구매 전환율 및 소요시간(평균/중앙값)
+    signup_dates = cohort_users.set_index("user_id")["signup_date"]
+
+    to_first = [
+        (order_lists[uid][0] - signup_dates[uid]).total_seconds() / 60
+        for uid in first_purchase_ids
+        if (order_lists[uid][0] - signup_dates[uid]).total_seconds() >= 0
+    ]
+    to_repeat = [
+        (order_lists[uid][1] - order_lists[uid][0]).total_seconds() / 60
+        for uid in repeat_ids
+        if (order_lists[uid][1] - order_lists[uid][0]).total_seconds() >= 0
+    ]
+    to_first = pd.Series(to_first, dtype=float)
+    to_repeat = pd.Series(to_repeat, dtype=float)
+
+    rows = [
+        {
+            "단계": "회원가입 → 첫 구매",
+            "전환율": f"{(values[1] / values[0] * 100) if values[0] else 0:.1f}%",
+            "평균 소요시간": _fmt_duration(to_first.mean() if not to_first.empty else float("nan")),
+            "중앙값 소요시간": _fmt_duration(to_first.median() if not to_first.empty else float("nan")),
+        },
+        {
+            "단계": "첫 구매 → 재구매",
+            "전환율": f"{(values[2] / values[1] * 100) if values[1] else 0:.1f}%",
+            "평균 소요시간": _fmt_duration(to_repeat.mean() if not to_repeat.empty else float("nan")),
+            "중앙값 소요시간": _fmt_duration(to_repeat.median() if not to_repeat.empty else float("nan")),
+        },
+    ]
+    st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
 
 
 def render_cohort(users, orders):
-    """코호트 리텐션 히트맵 (가입 월별 → 이후 N개월 재구매율). 분석 기간 이전 가입자는 코호트 정의가 안 되므로 제외"""
-    st.subheader(
-        "코호트 리텐션 히트맵",
-        help="가입 월(행)별 고객이 이후 몇 개월 차(열)에 다시 구매했는지 보여줘요. 색이 진할수록 재구매율이 높다는 뜻이고, 빈 칸은 아직 그 시점에 도달하지 않아 데이터가 없는 구간이에요.",
-    )
+    """재구매 유지율 (가입 월별 → 이후 N개월 재구매율). 분석 기간 이전 가입자는 코호트 정의가 안 되므로 제외"""
+    cohort_help = "가입 월(행)별 고객이 이후 몇 개월 차(열)에 다시 구매했는지 보여줘요. 색이 진할수록 재구매율이 높다는 뜻이고, 빈 칸은 아직 그 시점에 도달하지 않아 데이터가 없는 구간이에요."
 
     if orders.empty:
+        st.subheader("재구매 유지율", help=cohort_help)
         st.info("표시할 데이터가 없습니다.")
         return
 
@@ -464,6 +641,7 @@ def render_cohort(users, orders):
     ).dropna(subset=["cohort_month"])
 
     if merged.empty:
+        st.subheader("재구매 유지율", help=cohort_help)
         st.info("선택한 기간에 신규 가입 코호트 데이터가 없습니다.")
         return
 
@@ -489,6 +667,8 @@ def render_cohort(users, orders):
         for row in retention.values
     ]
 
+    st.subheader("재구매 유지율", help=cohort_help)
+
     fig = go.Figure(
         go.Heatmap(
             z=retention.values,
@@ -500,7 +680,7 @@ def render_cohort(users, orders):
             hoverongaps=False,
         )
     )
-    fig.update_layout(margin=dict(t=30))
+    fig.update_layout(height=max(220, 32 * len(retention.index) + 60), margin=dict(t=30))
     st.plotly_chart(fig, width='stretch')
 
 
@@ -518,7 +698,10 @@ def render_date_filter(orders, events):
     max_date = events["timestamp"].max().date()
 
     with st.sidebar:
-        st.markdown("### 기간 필터")
+        st.markdown(
+            "<div style='font-size:13px;font-weight:600;margin-bottom:0.5rem;color:#868E96'>기간 필터</div>",
+            unsafe_allow_html=True,
+        )
         options = list(DATE_PRESETS.keys()) + ["직접 선택"]
         # index와 key를 함께 넘기면 위젯이 처음 만들어질 때는 index가 기본값으로 쓰이지만,
         # 이미 session_state에 값이 있는데도 index를 같이 넘기면 Streamlit이 경고를 띄우므로
@@ -534,7 +717,7 @@ def render_date_filter(orders, events):
             end = st.selectbox("종료일", available_dates, key="custom_end_date", **end_kwargs)
             if start > end:
                 st.warning("시작일이 종료일보다 늦을 수 없습니다.")
-                return None, None, None, None, "일별", choice
+                return None, None, None, None, "일별", choice, None, None
             granularity = "일별"  # 직접 선택은 고른 기간을 그대로 일 단위로 보여줌 (임의로 요약하지 않음)
         else:
             granularity, days_back = DATE_PRESETS[choice]
@@ -555,7 +738,7 @@ def render_date_filter(orders, events):
     f_events = events[(events["timestamp"].dt.date >= start) & (events["timestamp"].dt.date <= end)]
     prev_orders = orders[(orders["order_date"].dt.date >= prev_start) & (orders["order_date"].dt.date <= prev_end)]
     prev_events = events[(events["timestamp"].dt.date >= prev_start) & (events["timestamp"].dt.date <= prev_end)]
-    return f_orders, f_events, prev_orders, prev_events, granularity, choice
+    return f_orders, f_events, prev_orders, prev_events, granularity, choice, start, end
 
 
 def render_charts():
@@ -568,7 +751,9 @@ def render_charts():
 
     st.markdown(DASHBOARD_CSS, unsafe_allow_html=True)
 
-    orders_f, events_f, prev_orders, prev_events, granularity, date_choice = render_date_filter(orders, events)
+    orders_f, events_f, prev_orders, prev_events, granularity, date_choice, filter_start, filter_end = render_date_filter(
+        orders, events
+    )
     if orders_f is None:
         return
     if orders_f.empty or events_f.empty:
@@ -588,24 +773,116 @@ def render_charts():
         st.session_state["ai_auto_trigger"] = True
         st.switch_page("pages/2_AI_Insights.py")
 
-    render_kpi_cards(orders_f, events_f, prev_orders, prev_events)
-    render_customer_profile(users, events_f)
+    rfm = assign_segment(calculate_rfm(orders_f.copy()))
 
-    col1, col2 = st.columns(2)
-    with col1:
-        render_segment_ranking(orders_f)
-    with col2:
-        render_channel_ranking(users, orders_f)
+    tab_overview, tab_revenue, tab_behavior, tab_detail = st.tabs(
+        ["개요", "매출 분석", "행동 분석", "상세 분석"]
+    )
 
-    render_category_ranking(orders_f)
+    with tab_overview:
+        active_ids = events_f["user_id"].unique()
+        users_active = users[users["user_id"].isin(active_ids)]
+        profile_cols = [c for c in ["user_id", "name", "gender", "age"] if c in users_active.columns]
+        profile_df = users_active[profile_cols]
+        if "persona_type" in users_active.columns:
+            profile_df = profile_df.assign(페르소나=users_active["persona_type"].map(PERSONA_KR).values)
+        order_cols = [c for c in ["order_id", "order_date", "user_id", "category", "total_amount"] if c in orders_f.columns]
 
-    col_trend, col_funnel = st.columns(2)
-    with col_trend:
-        render_gmv_chart(orders_f, granularity)
-    with col_funnel:
-        render_funnel(events_f)
+        _, btn_col = st.columns([6, 1.3])
+        with btn_col:
+            _data_view_button(
+                {
+                    "활동 고객 데이터": profile_df,
+                    "주문 데이터": orders_f[order_cols].sort_values("order_date", ascending=False),
+                }
+            )
 
-    with st.expander("상세 분석 (RFM 산포도 · 코호트 리텐션)"):
+        render_kpi_cards(orders_f, events_f, prev_orders, prev_events)
+        render_customer_profile(users, events_f)
+
+    with tab_revenue:
+        merged_orders = orders_f.merge(users[["user_id", "acquisition_channel"]], on="user_id").merge(
+            rfm[["user_id", "segment"]], on="user_id"
+        )
+        merged_orders["유입채널"] = merged_orders["acquisition_channel"].map(CHANNEL_KR)
+        revenue_raw = merged_orders[
+            ["order_id", "order_date", "user_id", "category", "total_amount", "유입채널", "segment"]
+        ].sort_values("order_date", ascending=False)
+
+        _, btn_col = st.columns([6, 1.3])
+        with btn_col:
+            _data_view_button(revenue_raw)
+
+        col1, col2 = st.columns(2)
+        with col1:
+            render_segment_ranking(orders_f)
+        with col2:
+            render_channel_ranking(users, orders_f)
+
+        col3, col4 = st.columns(2)
+        with col3:
+            render_category_ranking(orders_f)
+        with col4:
+            render_gmv_chart(orders_f, granularity)
+
+    with tab_behavior:
+        behavior_raw = events_f[["user_id", "session_id", "event_type", "timestamp"]].sort_values(
+            "timestamp", ascending=False
+        )
+        cohort_signup_raw = users[
+            (users["signup_date"].dt.date >= filter_start) & (users["signup_date"].dt.date <= filter_end)
+        ]
+        cohort_signup_cols = [c for c in ["user_id", "name", "gender", "age", "signup_date"] if c in cohort_signup_raw.columns]
+
+        _, btn_col = st.columns([6, 1.3])
+        with btn_col:
+            _data_view_button(
+                {
+                    "이벤트 데이터 (구매 퍼널)": behavior_raw,
+                    "가입 고객 데이터 (재구매 퍼널)": cohort_signup_raw[cohort_signup_cols],
+                }
+            )
+
+        col_funnel_a, col_funnel_b = st.columns(2)
+        with col_funnel_a:
+            render_funnel(events_f)
+        with col_funnel_b:
+            render_repeat_funnel(users, orders, filter_start, filter_end)
+
+    with tab_detail:
+        signup_month = users.set_index("user_id")["signup_date"].dt.to_period("M")
+        obs_start_month = orders_f["order_date"].min().to_period("M")
+        cohort_month = signup_month[signup_month >= obs_start_month]
+        order_month = orders_f["order_date"].dt.to_period("M")
+        cohort_merged = orders_f.assign(
+            cohort_month=orders_f["user_id"].map(cohort_month), order_month=order_month
+        ).dropna(subset=["cohort_month"])
+
+        cohort_raw = pd.DataFrame()
+        if not cohort_merged.empty:
+            cohort_merged["cohort_month"] = cohort_merged["cohort_month"].astype("period[M]")
+            cohort_merged["month_index"] = (
+                (cohort_merged["order_month"].dt.year - cohort_merged["cohort_month"].dt.year) * 12
+                + (cohort_merged["order_month"].dt.month - cohort_merged["cohort_month"].dt.month)
+            )
+            cohort_raw = (
+                cohort_merged.assign(
+                    가입월=cohort_merged["cohort_month"].astype(str),
+                    구매월=cohort_merged["order_month"].astype(str),
+                )[["order_id", "user_id", "가입월", "구매월", "month_index", "category", "total_amount"]]
+                .rename(columns={"month_index": "가입후개월차"})
+                .sort_values("구매월", ascending=False)
+            )
+
+        _, btn_col = st.columns([6, 1.3])
+        with btn_col:
+            _data_view_button(
+                {
+                    "RFM (고객별 지표)": rfm[["user_id", "Recency", "Frequency", "Monetary", "segment"]],
+                    "재구매 유지율 (주문별 가입월/구매월)": cohort_raw,
+                }
+            )
+
         col4, col5 = st.columns(2)
         with col4:
             render_rfm_scatter(orders_f)
