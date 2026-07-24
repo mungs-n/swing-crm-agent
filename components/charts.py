@@ -520,15 +520,21 @@ def render_date_filter(orders, events):
     with st.sidebar:
         st.markdown("### 기간 필터")
         options = list(DATE_PRESETS.keys()) + ["직접 선택"]
-        choice = st.radio("빠른 선택", options, index=3, key="date_preset")
+        # index와 key를 함께 넘기면 위젯이 처음 만들어질 때는 index가 기본값으로 쓰이지만,
+        # 이미 session_state에 값이 있는데도 index를 같이 넘기면 Streamlit이 경고를 띄우므로
+        # 이미 값이 있을 때는 index를 아예 넘기지 않는다.
+        radio_kwargs = {} if "date_preset" in st.session_state else {"index": options.index("전체 기간")}
+        choice = st.radio("빠른 선택", options, key="date_preset", **radio_kwargs)
 
         if choice == "직접 선택":
             available_dates = sorted(events["timestamp"].dt.date.unique())
-            start = st.selectbox("시작일", available_dates, index=0, key="custom_start_date")
-            end = st.selectbox("종료일", available_dates, index=len(available_dates) - 1, key="custom_end_date")
+            start_kwargs = {} if "custom_start_date" in st.session_state else {"index": 0}
+            end_kwargs = {} if "custom_end_date" in st.session_state else {"index": len(available_dates) - 1}
+            start = st.selectbox("시작일", available_dates, key="custom_start_date", **start_kwargs)
+            end = st.selectbox("종료일", available_dates, key="custom_end_date", **end_kwargs)
             if start > end:
                 st.warning("시작일이 종료일보다 늦을 수 없습니다.")
-                return None, None, None, None, "일별"
+                return None, None, None, None, "일별", choice
             granularity = "일별"  # 직접 선택은 고른 기간을 그대로 일 단위로 보여줌 (임의로 요약하지 않음)
         else:
             granularity, days_back = DATE_PRESETS[choice]
@@ -549,7 +555,7 @@ def render_date_filter(orders, events):
     f_events = events[(events["timestamp"].dt.date >= start) & (events["timestamp"].dt.date <= end)]
     prev_orders = orders[(orders["order_date"].dt.date >= prev_start) & (orders["order_date"].dt.date <= prev_end)]
     prev_events = events[(events["timestamp"].dt.date >= prev_start) & (events["timestamp"].dt.date <= prev_end)]
-    return f_orders, f_events, prev_orders, prev_events, granularity
+    return f_orders, f_events, prev_orders, prev_events, granularity, choice
 
 
 def render_charts():
@@ -562,12 +568,25 @@ def render_charts():
 
     st.markdown(DASHBOARD_CSS, unsafe_allow_html=True)
 
-    orders_f, events_f, prev_orders, prev_events, granularity = render_date_filter(orders, events)
+    orders_f, events_f, prev_orders, prev_events, granularity, date_choice = render_date_filter(orders, events)
     if orders_f is None:
         return
     if orders_f.empty or events_f.empty:
         st.warning("선택한 기간에 데이터가 없습니다.")
         return
+
+    if st.button("🤖 이 기간으로 AI 인사이트 보기", type="primary"):
+        # date_preset/custom_start_date/custom_end_date는 AI 인사이트 페이지와 동일한
+        # key를 쓰고 있지만, Streamlit은 st.switch_page로 페이지를 이동하면 위젯에
+        # 연결된 session_state 값을 초기화해버린다. 그래서 위젯 key가 아닌 별도의
+        # "carry" key로 값을 직접 들고 넘어가서, AI 인사이트 페이지 쪽에서 위젯을
+        # 만들기 전에 그 값을 다시 심어주는 방식으로 기간을 그대로 유지한다.
+        st.session_state["ai_carry_date_preset"] = date_choice
+        if date_choice == "직접 선택":
+            st.session_state["ai_carry_custom_start"] = st.session_state.get("custom_start_date")
+            st.session_state["ai_carry_custom_end"] = st.session_state.get("custom_end_date")
+        st.session_state["ai_auto_trigger"] = True
+        st.switch_page("pages/2_AI_Insights.py")
 
     render_kpi_cards(orders_f, events_f, prev_orders, prev_events)
     render_customer_profile(users, events_f)
