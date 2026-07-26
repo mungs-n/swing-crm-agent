@@ -33,41 +33,6 @@ def load_data():
     return users, orders, events
 
 
-def compute_recency_days(users: pd.DataFrame, orders: pd.DataFrame, reference_date=None) -> pd.Series:
-    """전체 유저(users.csv 기준) 대상으로 '기준일로부터 마지막 구매까지 경과일'을 계산한다.
-
-    reference_date를 지정하면 그 날짜를 기준으로 계산한다 (기본은 orders 내
-    가장 최근 주문일). AI 인사이트에서는 선택한 분석 기간의 종료일을
-    reference_date로 넘겨서, '그 시점 기준으로' 휴면/이탈 위험 여부를 판단한다.
-
-    한 번도 구매하지 않은 유저는 orders 테이블에 나타나지 않으므로 빠뜨리기
-    쉽다. 이 함수는 구매 이력이 있으면 마지막 구매일을, 없으면 가입일을
-    기준으로 삼아 users.csv의 모든 유저에 대해 값을 계산한다.
-    """
-    users = users.copy()
-    orders = orders.copy()
-    users["signup_date"] = pd.to_datetime(users["signup_date"])
-    orders["order_date"] = pd.to_datetime(orders["order_date"])
-
-    if reference_date is not None:
-        latest_date = pd.Timestamp(reference_date)
-    elif len(orders):
-        latest_date = orders["order_date"].max()
-    else:
-        latest_date = users["signup_date"].max()
-
-    if len(orders):
-        last_order_date = orders.groupby("user_id")["order_date"].max()
-    else:
-        last_order_date = pd.Series(dtype="datetime64[ns]")
-    signup_date = users.set_index("user_id")["signup_date"]
-
-    reference = last_order_date.reindex(signup_date.index)
-    reference = reference.fillna(signup_date)
-
-    return (latest_date - reference).dt.days
-
-
 def compute_repeat_purchase_rate(orders: pd.DataFrame) -> float:
     """2회 이상 구매한 고객 비율(%). (구매 이력이 있는 고객 중 기준)"""
     if orders.empty:
@@ -93,26 +58,38 @@ def compute_rfm(orders: pd.DataFrame) -> pd.DataFrame:
     return rfm.reset_index()
 
 
-def compute_cohort_retention(users: pd.DataFrame, orders: pd.DataFrame) -> pd.DataFrame:
+def compute_cohort_retention(users: pd.DataFrame, orders_full: pd.DataFrame, start=None, end=None) -> pd.DataFrame:
     """가입월 기준 코호트 리텐션(%) 피벗 테이블 계산
 
     코호트 = 회원가입 월. 각 코호트 전체 인원 대비, 가입 후 N개월차에
     '구매'가 있었던 회원 비율(%)을 계산한다.
-    orders 데이터의 관측 시작월 이후에 가입한 코호트만 포함한다.
+
+    orders_full은 반드시 기간으로 잘라내지 않은 전체 주문 이력이어야 한다. 선택한
+    기간으로 자른 주문만 넘기면, 그 기간이 짧을수록 'N개월 후 시점 자체가 관측 기간
+    안에 없어서 데이터가 없는 것'과 '실제로 재구매하지 않은 것'을 구분할 수 없어서
+    재구매율이 실제보다 낮게(짧은 기간에서는 0%로) 잘못 계산된다.
+
+    start/end를 주면 그 기간에 가입한 코호트만 포함하고, 생략하면 orders_full의
+    관측 시작월 이후 가입자 전체를 코호트로 포함한다.
     """
-    if orders.empty:
+    if orders_full.empty:
         return pd.DataFrame()
 
     users = users.copy()
-    orders = orders.copy()
+    orders_full = orders_full.copy()
 
     users["signup_date"] = pd.to_datetime(users["signup_date"])
     users["cohort_month"] = users["signup_date"].dt.to_period("M")
 
-    obs_start_month = orders["order_date"].min().to_period("M")
-    users = users[users["cohort_month"] >= obs_start_month]
+    if start is not None and end is not None:
+        start_month = pd.Timestamp(start).to_period("M")
+        end_month = pd.Timestamp(end).to_period("M")
+        users = users[(users["cohort_month"] >= start_month) & (users["cohort_month"] <= end_month)]
+    else:
+        obs_start_month = orders_full["order_date"].min().to_period("M")
+        users = users[users["cohort_month"] >= obs_start_month]
 
-    merged = orders.merge(users[["user_id", "cohort_month"]], on="user_id", how="inner")
+    merged = orders_full.merge(users[["user_id", "cohort_month"]], on="user_id", how="inner")
     if merged.empty:
         return pd.DataFrame()
 
@@ -140,24 +117,21 @@ def get_period_slices(users: pd.DataFrame, orders: pd.DataFrame, events: pd.Data
     필터링을 한 곳으로 모은 헬퍼. 이 부분만 고치면 두 함수 모두에 반영되므로,
     한쪽만 고치고 다른 쪽을 깜빡하는 종류의 버그(과거 total_users 건)를 막는다.
 
-    - period_orders / period_events: 선택한 기간(start_date~end_date) 안의 데이터만
-    - orders_until_end: 휴면 판정처럼 기간 시작 이전 구매 이력도 봐야 하는 계산을 위해,
-      기간 '종료일'까지의 전체 주문 이력 (시작일 이전 것도 포함)
+    period_orders / period_events: 선택한 기간(start_date~end_date) 안의 데이터만.
 
     주의: users["signup_date"]/orders["order_date"]/events["timestamp"]가 이미
     datetime으로 변환돼 있다고 가정한다 (호출 전에 변환해서 넘길 것).
     """
     period_orders = orders[(orders["order_date"].dt.date >= start_date) & (orders["order_date"].dt.date <= end_date)]
     period_events = events[(events["timestamp"].dt.date >= start_date) & (events["timestamp"].dt.date <= end_date)]
-    orders_until_end = orders[orders["order_date"].dt.date <= end_date]
-    return period_orders, period_events, orders_until_end
+    return period_orders, period_events
 
 
 def get_dashboard_summary(start_date, end_date) -> str:
     """선택한 분석 기간(start_date~end_date) 데이터만 반영한 요약 (Claude에게 넘길 컨텍스트)"""
     users, orders, events = load_data()
 
-    period_orders, period_events, orders_until_end = get_period_slices(users, orders, events, start_date, end_date)
+    period_orders, period_events = get_period_slices(users, orders, events, start_date, end_date)
 
     # load_data()는 users["signup_date"]를 datetime으로 변환해두지 않으므로 여기서 변환
     signup_date = pd.to_datetime(users["signup_date"])
@@ -188,8 +162,19 @@ def get_dashboard_summary(start_date, end_date) -> str:
     cart_users = period_events[period_events["event_type"] == "add_to_cart"]["user_id"].nunique()
     cart_abandon_rate = (1 - purchase_users / cart_users) * 100 if cart_users > 0 else 0
 
-    recency_days = compute_recency_days(users, orders_until_end, reference_date=end_date)
-    dormant_users = (recency_days >= 90).sum()
+    # 휴면 비율의 정확한 분모는 '이 기간에 활동한 고객 수'가 아니라 '그 시점까지 가입한
+    # 전체 고객 수'다. 이 둘을 섞어서 나누면(예: 휴면 수 ÷ 기간 내 활성 고객 수) 서로
+    # 다른 기준으로 센 두 집단을 나누는 셈이라 비율 자체가 의미가 없어진다. 비율을
+    # 텍스트에 미리 계산해서 넣어두는 이유도, AI가 곁에 있는 다른 숫자(활성 고객 수 등)로
+    # 잘못 나눠서 엉뚱한 비율을 만들어내는 걸 막기 위해서다.
+    #
+    # 휴면 여부는 '90일 이상 미구매' 같은 자체 계산 대신 data/generate_data.py가
+    # 애초에 지정해둔 persona_type == "dormant" 라벨을 그대로 쓴다. 대시보드 탭1의
+    # "페르소나별 고객 수" 차트가 보여주는 휴면 고객 수와 항상 일치시키기 위해서다.
+    # (이 라벨은 가입 시점에 고정되는 값이라 기간을 바꿔도 이 숫자 자체는 변하지 않는다.)
+    total_customer_base = users[signup_date.dt.date <= end_date]["user_id"].nunique()
+    dormant_users = (users["persona_type"] == "dormant").sum()
+    dormant_rate = (dormant_users / total_customer_base * 100) if total_customer_base else 0
 
     repeat_purchase_rate = compute_repeat_purchase_rate(period_orders)
 
@@ -200,21 +185,29 @@ def get_dashboard_summary(start_date, end_date) -> str:
     else:
         top10_revenue_share = 0
 
-    retention = compute_cohort_retention(users, period_orders)
-    avg_month1_retention = retention[1].mean() if (not retention.empty and 1 in retention.columns) else 0
+    retention = compute_cohort_retention(users, orders, start_date, end_date)
+    # retention[1]이 아예 없거나 전부 NaN이면 "0% 재방문"이 아니라 '가입 후 1개월이
+    # 지난 코호트가 아직 없어서 측정 자체가 불가능한 상황'이다. 이걸 그냥 0.0%로
+    # 넘기면 AI가 실제로는 데이터가 없을 뿐인 상황을 '전원 이탈'로 오해해서 근거 없는
+    # 진단을 만들어낼 수 있어서, 두 경우를 구분해 명시적으로 알려준다.
+    if not retention.empty and 1 in retention.columns and retention[1].notna().any():
+        month1_retention_text = f"{retention[1].mean():.1f}%"
+    else:
+        month1_retention_text = "측정 불가 (분석 기간이 짧아 가입 후 1개월이 지난 신규 고객이 아직 없음)"
 
     return f"""
     분석 대상 기간: {start_date} ~ {end_date}
     - 해당 기간 내 가입 고객 수: {total_users}명
-    - 해당 기간 활성 고객 수: {active_users_period}명
+    - 해당 기간 활성 고객 수(이 기간에 방문 등 이벤트가 있었던 고객, 아래 휴면 고객과는 다른 기준): {active_users_period}명
     - GMV(총 거래액): ₩{gmv:,.0f}
     - AOV(평균 주문 금액): ₩{aov:,.0f}
     - 구매 전환율: {conversion_rate:.1f}%
     - 장바구니 이탈률: {cart_abandon_rate:.1f}%
-    - 휴면 고객({end_date} 기준 90일 이상 미구매, 무구매 고객 포함): {dormant_users}명
+    - {end_date} 기준 누적 전체 고객 수: {total_customer_base}명
+    - 휴면 고객(전체 고객 중 활동이 거의 없는 것으로 분류된 고객군, 기간과 무관하게 전체 고객 대상): {dormant_users}명 (전체 고객 {total_customer_base}명 대비 {dormant_rate:.1f}%. 반드시 이 비율을 그대로 쓰고, 위 '활성 고객 수'로 다시 나누지 말 것 — 서로 다른 기준의 집단이라 비율이 성립하지 않음)
     - 재구매율(해당 기간 내 2회 이상 구매 고객 비율): {repeat_purchase_rate:.1f}%
     - 상위 10% 고객의 매출 기여도: {top10_revenue_share:.1f}%
-    - 신규 고객의 1개월차 평균 재방문율: {avg_month1_retention:.1f}%
+    - 신규 고객의 1개월차 평균 재방문율: {month1_retention_text}
     """
 
 
@@ -240,7 +233,7 @@ def recommend_segment(start_date, end_date, users: pd.DataFrame, orders: pd.Data
     users["signup_date"] = pd.to_datetime(users["signup_date"])
     events["timestamp"] = pd.to_datetime(events["timestamp"])
 
-    period_orders, period_events, orders_until_end = get_period_slices(users, orders, events, start_date, end_date)
+    period_orders, period_events = get_period_slices(users, orders, events, start_date, end_date)
 
     # get_dashboard_summary()의 total_users와는 다르게 '기간 내 신규가입자'가 아니라
     # '누적 전체 가입자'를 쓴다. dormant_count/at_risk_count는 가입 시점과 무관하게
@@ -250,10 +243,14 @@ def recommend_segment(start_date, end_date, users: pd.DataFrame, orders: pd.Data
     # 다른 경로로 재발한다. (일부러 다르게 둔 것이며 실수가 아님)
     total_users = users[users["signup_date"].dt.date <= end_date]["user_id"].nunique()
 
-    # 선택 기간 종료일 기준 경과일 (휴면/이탈위험은 스냅샷 성격이라 기간 시작일보다는 종료일 기준이 자연스러움)
-    recency_days = compute_recency_days(users, orders_until_end, reference_date=end_date)
-    dormant_count = (recency_days >= 90).sum()
-    at_risk_count = ((recency_days >= 45) & (recency_days < 90)).sum()
+    # 휴면/이탈위험 여부는 자체 계산(예: 며칠간 미구매) 대신 data/generate_data.py가
+    # 애초에 지정해둔 persona_type 라벨을 그대로 쓴다. 대시보드 탭1의 "페르소나별
+    # 고객 수" 차트와 항상 같은 숫자를 가리키게 하기 위해서다. 가입 시점에 고정되는
+    # 라벨이라 이 두 값 자체는 기간을 바꿔도 변하지 않지만, 아래 다른 후보들(장바구니
+    # 이탈률, 쿠폰 사용률, 신규 전환율 등)은 여전히 선택한 기간에 따라 달라지므로,
+    # 그 기간에 더 심각한 다른 문제가 있으면 그쪽이 대신 선택될 수 있다.
+    dormant_count = (users["persona_type"] == "dormant").sum()
+    at_risk_count = (users["persona_type"] == "churn_risk").sum()
 
     # 신규 가입자(기간 종료일 기준 30일 이내) 중 해당 기간 내 구매 전환율
     new_users = users[(pd.Timestamp(end_date) - users["signup_date"]).dt.days.between(0, 30)]
@@ -273,9 +270,13 @@ def recommend_segment(start_date, end_date, users: pd.DataFrame, orders: pd.Data
     repeat_purchase_rate = compute_repeat_purchase_rate(period_orders)
 
     # --- 조건별 '기준치 대비 심각도' 점수화 (1.0 이상이면 기준치 초과) ---
+    # 휴면/이탈위험은 이제 둘 다 persona_type 기준 고정 인원(각 150명, 전체의 15%)이라
+    # divisor를 서로 다르게 두면(예전 0.15 vs 0.10) 둘 중 하나가 기간과 무관하게 거의
+    # 항상 이겨버린다 — 두 divisor를 0.15로 맞춰서, 이 둘이 같은 조건이면 동점이 되고
+    # 실제로 그 기간에 더 심각한 다른 지표(카트 이탈률 등)가 있으면 그쪽이 이길 수 있게 했다.
     candidates = [
         ("휴면 고객", (dormant_count / total_users) / 0.15 if total_users else 0),
-        ("이탈 위험 고객", (at_risk_count / total_users) / 0.10 if total_users else 0),
+        ("이탈 위험 고객", (at_risk_count / total_users) / 0.15 if total_users else 0),
         ("신규 탐색자", max(0.0, (0.3 - new_user_purchase_rate) / 0.3) if len(new_users) > 0 else 0.0),
         ("이탈 위험 고객", (cart_abandon_rate / 100) / 0.45),
         ("할인 구매자", (coupon_rate / 100) / 0.50),
@@ -348,6 +349,9 @@ def run_ai_analysis(summary):
 - 주어진 데이터에 근거해서만 서술하고, 없는 정보는 추측하지 말 것
 - 서로 다른 고객 세그먼트(예: 전체 고객 vs 신규 고객)의 지표를 섞어서
   단정적 인과관계로 서술하지 말 것 — 상관관계 수준의 신중한 표현을 사용할 것
+- 비율(%)은 데이터에 이미 계산되어 주어진 값만 그대로 인용할 것. 서로 다른 줄에 있는
+  두 숫자를 직접 나누거나 곱해서 새로운 비율/수치를 스스로 만들어내지 말 것 —
+  두 숫자가 같은 기준(같은 고객 집단, 같은 기간)으로 센 것인지 알 수 없어서 위험함
 - 어떤 수치를 "높다/낮다/충분하다/부족하다"고 평가할 때는, 비교할 명확한
   기준을 함께 제시할 수 있는 경우에만 그렇게 서술할 것
 - 주어진 지표를 전부 다 언급할 필요는 없음. 실제로 논리적 근거가 뚜렷한
@@ -485,7 +489,10 @@ def render_cohort_heatmap(retention: pd.DataFrame):
     fig.update_layout(
         margin=dict(l=10, r=10, t=10, b=10),
         height=440,
-        yaxis=dict(autorange="reversed"),
+        # 코호트가 1개뿐이면 "2026-06" 같은 축 라벨을 Plotly가 날짜로 오인해서 초 단위
+        # 눈금을 그리는 경우가 있어, 항상 카테고리(문자열) 축으로 명시해서 막는다.
+        xaxis=dict(type="category"),
+        yaxis=dict(type="category", autorange="reversed"),
     )
     st.plotly_chart(fig, use_container_width=True)
 
@@ -500,7 +507,7 @@ def render_detail_analysis(start_date, end_date):
         return
 
     rfm = compute_rfm(period_orders)
-    retention = compute_cohort_retention(users, period_orders)
+    retention = compute_cohort_retention(users, orders, start_date, end_date)
 
     col1, col2 = st.columns(2)
     with col1:
