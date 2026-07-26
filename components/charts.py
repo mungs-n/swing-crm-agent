@@ -621,28 +621,35 @@ def render_repeat_funnel(users, orders, start, end):
     st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
 
 
-def render_cohort(users, orders):
-    """재구매 유지율 (가입 월별 → 이후 N개월 재구매율). 분석 기간 이전 가입자는 코호트 정의가 안 되므로 제외"""
+def render_cohort(users, orders_full, start, end):
+    """재구매 유지율 (가입 월별 → 이후 N개월 재구매율).
+
+    코호트(어느 가입월을 보여줄지)는 선택한 기간(start~end)에 가입한 고객으로 한정하지만,
+    실제로 재구매했는지는 기간과 무관하게 orders_full(전체 주문 이력)로 판단해야 한다.
+    기간으로 잘라낸 주문만 보면 '아직 그 개월차에 도달하지 않음'과 '실제로 재구매하지
+    않음'을 구분할 수 없어서, 짧은 기간을 고를수록 재구매율이 실제보다 낮게(심하면 0%로)
+    잘못 계산된다."""
     cohort_help = "가입 월(행)별 고객이 이후 몇 개월 차(열)에 다시 구매했는지 보여줘요. 색이 진할수록 재구매율이 높다는 뜻이고, 빈 칸은 아직 그 시점에 도달하지 않아 데이터가 없는 구간이에요."
 
-    if orders.empty:
+    signup_month = users.set_index("user_id")["signup_date"].dt.to_period("M")
+    start_month = pd.Timestamp(start).to_period("M")
+    end_month = pd.Timestamp(end).to_period("M")
+    cohort_month = signup_month[(signup_month >= start_month) & (signup_month <= end_month)]
+
+    if cohort_month.empty:
         st.subheader("재구매 유지율", help=cohort_help)
-        st.info("표시할 데이터가 없습니다.")
+        st.info("선택한 기간에 신규 가입한 고객이 없습니다.")
         return
 
-    obs_start_month = orders["order_date"].min().to_period("M")
-    signup_month = users.set_index("user_id")["signup_date"].dt.to_period("M")
-    cohort_month = signup_month[signup_month >= obs_start_month]
-    order_month = orders["order_date"].dt.to_period("M")
-
-    merged = orders.assign(
-        cohort_month=orders["user_id"].map(cohort_month),
+    order_month = orders_full["order_date"].dt.to_period("M")
+    merged = orders_full.assign(
+        cohort_month=orders_full["user_id"].map(cohort_month),
         order_month=order_month,
     ).dropna(subset=["cohort_month"])
 
     if merged.empty:
         st.subheader("재구매 유지율", help=cohort_help)
-        st.info("선택한 기간에 신규 가입 코호트 데이터가 없습니다.")
+        st.info("선택한 기간에 가입한 고객의 구매 이력이 아직 없습니다.")
         return
 
     # Period끼리 직접 빼면 데이터가 적을 때 NaT 처리 관련 오류가 나서, 연/월 정수로 직접 계산
@@ -651,6 +658,7 @@ def render_cohort(users, orders):
         (merged["order_month"].dt.year - merged["cohort_month"].dt.year) * 12
         + (merged["order_month"].dt.month - merged["cohort_month"].dt.month)
     )
+    merged = merged[merged["month_index"] >= 0]
 
     cohort_sizes = cohort_month.value_counts()
 
@@ -680,7 +688,14 @@ def render_cohort(users, orders):
             hoverongaps=False,
         )
     )
-    fig.update_layout(height=max(220, 32 * len(retention.index) + 60), margin=dict(t=30))
+    fig.update_layout(
+        height=max(220, 32 * len(retention.index) + 60),
+        margin=dict(t=30),
+        # 코호트가 1개뿐이면 "2026-06" 같은 축 라벨을 Plotly가 날짜로 오인해서 초 단위
+        # 눈금을 그리는 경우가 있어, 항상 카테고리(문자열) 축으로 명시해서 막는다.
+        xaxis=dict(type="category"),
+        yaxis=dict(type="category"),
+    )
     st.plotly_chart(fig, width='stretch')
 
 
@@ -850,12 +865,17 @@ def render_charts():
             render_repeat_funnel(users, orders, filter_start, filter_end)
 
     with tab_detail:
+        # 코호트(어느 가입월을 볼지)는 선택한 기간에 가입한 고객으로 한정하되, 재구매 여부는
+        # 기간과 무관하게 전체 주문 이력(orders)으로 판단한다. orders_f(기간으로 잘린 주문)를
+        # 쓰면 "아직 그 개월차에 도달하지 않음"과 "실제로 재구매하지 않음"을 구분할 수 없어서,
+        # 짧은 기간을 고를수록 재구매율이 실제보다 훨씬 낮게(심하면 0%로) 잘못 나온다.
         signup_month = users.set_index("user_id")["signup_date"].dt.to_period("M")
-        obs_start_month = orders_f["order_date"].min().to_period("M")
-        cohort_month = signup_month[signup_month >= obs_start_month]
-        order_month = orders_f["order_date"].dt.to_period("M")
-        cohort_merged = orders_f.assign(
-            cohort_month=orders_f["user_id"].map(cohort_month), order_month=order_month
+        start_month = pd.Timestamp(filter_start).to_period("M")
+        end_month = pd.Timestamp(filter_end).to_period("M")
+        cohort_month = signup_month[(signup_month >= start_month) & (signup_month <= end_month)]
+        order_month = orders["order_date"].dt.to_period("M")
+        cohort_merged = orders.assign(
+            cohort_month=orders["user_id"].map(cohort_month), order_month=order_month
         ).dropna(subset=["cohort_month"])
 
         cohort_raw = pd.DataFrame()
@@ -865,6 +885,7 @@ def render_charts():
                 (cohort_merged["order_month"].dt.year - cohort_merged["cohort_month"].dt.year) * 12
                 + (cohort_merged["order_month"].dt.month - cohort_merged["cohort_month"].dt.month)
             )
+            cohort_merged = cohort_merged[cohort_merged["month_index"] >= 0]
             cohort_raw = (
                 cohort_merged.assign(
                     가입월=cohort_merged["cohort_month"].astype(str),
@@ -887,4 +908,4 @@ def render_charts():
         with col4:
             render_rfm_scatter(orders_f)
         with col5:
-            render_cohort(users, orders_f)
+            render_cohort(users, orders, filter_start, filter_end)
