@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "swing-crm-dashboard",
+      "runtimeExecutable": "streamlit",
+      "runtimeArgs": ["run", "Home.py", "--server.headless=true"],
+      "port": 8501
+    }
+  ]
+}

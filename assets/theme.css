@@ -1,0 +1,471 @@
+/* ATHLEPA CRM 디자인 테마 — 참고 디자인(세련된 CRM 대시보드 디자인.zip)의
+   컬러/폰트/여백 토큰을 Streamlit 기본 UI에 적용 */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+    --athlepa-primary: #7C3AED;
+    --athlepa-primary-hover: #6D28D9;
+    --athlepa-secondary: #F3F0FF;
+    --athlepa-secondary-text: #5B21B6;
+    --athlepa-muted: #F5F5F8;
+    --athlepa-muted-text: #888699;
+    --athlepa-border: #E8E6EE;
+    --athlepa-foreground: #111018;
+    --athlepa-sidebar-bg: #1E0A3C;
+    --athlepa-sidebar-fg: #E8E0F5;
+    --athlepa-sidebar-accent: #2D1560;
+    --athlepa-radius: 10px;
+}
+
+html, body, [class*="css"] {
+    font-family: 'Inter', 'Pretendard', 'Malgun Gothic', sans-serif !important;
+}
+
+/* ---------- 전체 폰트 크기 축소 ---------- */
+[data-testid="stAppViewContainer"] {
+    font-size: 14px;
+}
+[data-testid="stMarkdownContainer"] p {
+    font-size: 0.9rem;
+}
+h1 { font-size: 1.5rem !important; font-weight: 700 !important; }
+h2 { font-size: 1.2rem !important; font-weight: 600 !important; }
+h3, [data-testid="stHeading"] h3 { font-size: 1.05rem !important; font-weight: 600 !important; }
+h4 { font-size: 0.95rem !important; font-weight: 600 !important; }
+[data-testid="stCaptionContainer"] { font-size: 0.78rem !important; color: var(--athlepa-muted-text) !important; }
+
+/* ---------- 페이지 상하 여백 (모든 페이지의 제목 위치를 통일) ---------- */
+div[data-testid="stMainBlockContainer"] {
+    padding-top: 2rem !important;
+    padding-bottom: 1rem !important;
+    display: flex !important;
+    flex-direction: column !important;
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+}
+/* stMainBlockContainer와 stBottom(채팅 입력창 고정바) 사이에 Streamlit이 자체적으로
+   넣는 이름 없는 spacer div도 flex:1로 늘어나서 본문 공간을 나눠 먹기 때문에,
+   그 spacer는 늘어나지 않게 눌러서 여유 공간이 전부 본문(stMainBlockContainer)
+   쪽으로 가도록 한다. */
+[data-testid="stAppScrollToBottomContainer"] > div:not([data-testid]) {
+    flex: 0 1 auto !important;
+}
+div[data-testid="stMain"] div[data-testid="stVerticalBlock"] {
+    gap: 0.6rem !important;
+}
+div[data-testid="stMain"] h1 {
+    margin-bottom: 0 !important;
+}
+div[data-testid="stHeadingWithActionElements"] {
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+}
+
+/* ---------- 사이드바 ---------- */
+[data-testid="stSidebar"] {
+    background-color: var(--athlepa-sidebar-bg) !important;
+    min-width: 200px !important;
+    max-width: 200px !important;
+    width: 200px !important;
+}
+[data-testid="stSidebar"] * {
+    color: var(--athlepa-sidebar-fg) !important;
+}
+[data-testid="stSidebarNav"] a,
+[data-testid="stSidebarNav"] span {
+    border-radius: 8px !important;
+    font-size: 0.85rem !important;
+    font-weight: 500 !important;
+}
+[data-testid="stSidebarNav"] a:hover {
+    background-color: var(--athlepa-sidebar-accent) !important;
+}
+[data-testid="stSidebarNav"] a[aria-current="page"] {
+    background-color: var(--athlepa-sidebar-accent) !important;
+}
+[data-testid="stSidebar"] hr {
+    border-color: rgba(255,255,255,0.08) !important;
+}
+
+/* ---------- 버튼 ---------- */
+.stButton > button, .stDownloadButton > button, .stLinkButton > a {
+    border-radius: var(--athlepa-radius) !important;
+    font-size: 0.85rem !important;
+    font-weight: 500 !important;
+    padding: 0.4rem 0.9rem !important;
+    min-height: 2.2rem !important;
+    border: 1px solid var(--athlepa-border) !important;
+    transition: all 0.15s ease;
+}
+.stButton > button[kind="primary"] {
+    background-color: var(--athlepa-primary) !important;
+    border-color: var(--athlepa-primary) !important;
+}
+.stButton > button[kind="primary"]:hover {
+    background-color: var(--athlepa-primary-hover) !important;
+    border-color: var(--athlepa-primary-hover) !important;
+}
+.stButton > button[kind="secondary"]:hover {
+    border-color: var(--athlepa-primary) !important;
+    color: var(--athlepa-primary) !important;
+}
+
+/* ---------- 카드형 컨테이너 (st.container(border=True)) ---------- */
+[data-testid="stVerticalBlock"] {
+    border-radius: var(--athlepa-radius) !important;
+    border-color: var(--athlepa-border) !important;
+}
+
+/* ---------- 입력 위젯 ---------- */
+.stTextInput input, .stTextArea textarea, .stDateInput input, .stTimeInput input,
+[data-baseweb="select"] > div {
+    border-radius: 8px !important;
+    font-size: 0.85rem !important;
+    background-color: var(--athlepa-muted) !important;
+    border-color: transparent !important;
+}
+
+/* ---------- 탭 ---------- */
+[data-baseweb="tab-list"] {
+    gap: 28px !important;
+}
+[data-baseweb="tab"] {
+    font-size: 0.85rem !important;
+    font-weight: 500 !important;
+    height: 2.1rem !important;
+    padding-left: 2px !important;
+    padding-right: 2px !important;
+}
+[data-baseweb="tab-highlight"] {
+    background-color: var(--athlepa-primary) !important;
+}
+
+/* ---------- 데이터프레임 / 테이블 ---------- */
+[data-testid="stDataFrame"] {
+    border-radius: var(--athlepa-radius) !important;
+    overflow: hidden;
+    font-size: 0.82rem !important;
+}
+
+/* ---------- expander ---------- */
+[data-testid="stExpander"] {
+    border-radius: var(--athlepa-radius) !important;
+    border-color: var(--athlepa-border) !important;
+}
+
+/* ---------- 알림 박스 (info/success/warning/error) ---------- */
+[data-testid="stAlert"] {
+    border-radius: var(--athlepa-radius) !important;
+    font-size: 0.85rem !important;
+}
+
+/* ---------- 채팅 ---------- */
+[data-testid="stChatMessage"] {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 4px 0 !important;
+    font-size: 0.85rem !important;
+    align-items: flex-start !important;
+    gap: 6px !important;
+}
+[data-testid="stChatMessageAvatarUser"],
+[data-testid="stChatMessageAvatarAssistant"] {
+    width: 28px !important;
+    height: 28px !important;
+    min-width: 28px !important;
+    border-radius: 50% !important;
+}
+[data-testid="stChatMessageAvatarAssistant"] {
+    background: var(--athlepa-primary) !important;
+}
+[data-testid="stChatMessageAvatarAssistant"] [data-testid="stIconMaterial"] {
+    color: #ffffff !important;
+}
+[data-testid="stChatMessageAvatarUser"] {
+    background: var(--athlepa-border) !important;
+}
+[data-testid="stChatMessageAvatarUser"] [data-testid="stIconMaterial"] {
+    color: var(--athlepa-muted-text) !important;
+}
+[data-testid="stChatMessageContent"] {
+    border-radius: 14px;
+    padding: 8px 14px !important;
+    max-width: 78%;
+    width: fit-content;
+    /* Streamlit 기본값이 이 요소에 margin:auto를 줘서, fit-content로 좁아진
+       말풍선을 아바타로부터 멀리 떨어뜨려 가운데 정렬해버린다(간격이 커 보이는
+       진짜 원인). 늘어나지 않고(margin 없이) 아바타 바로 옆에 붙게 고정한다. */
+    margin: 0 !important;
+    flex: 0 1 auto !important;
+}
+[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) [data-testid="stChatMessageContent"] {
+    background: #ffffff;
+    border: 1px solid var(--athlepa-border);
+    border-top-left-radius: 3px;
+}
+[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
+    flex-direction: row-reverse !important;
+}
+[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stChatMessageContent"] {
+    background: var(--athlepa-primary);
+    border-top-right-radius: 3px;
+    margin-left: auto !important;
+}
+[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stChatMessageContent"] p {
+    color: #ffffff !important;
+}
+[data-testid="stChatInput"] textarea {
+    border-radius: var(--athlepa-radius) !important;
+    font-size: 0.85rem !important;
+}
+/* 입력창을 감싸는 하단 고정 바(stBottom)에 Streamlit 기본 여백이 꽤 커서,
+   입력창이 화면 맨 아래보다 한참 위에 뜨고 그만큼 채팅 영역이 못 쓰는 죽은
+   공간이 생긴다. 여백을 줄여서 입력창이 더 아래로 내려가고, 그만큼 채팅
+   영역이 쓸 수 있는 세로 공간이 늘어나게 한다. */
+[data-testid="stBottomBlockContainer"] {
+    padding-top: 0.4rem !important;
+    padding-bottom: 1.8rem !important;
+}
+
+/* ---------- 챗봇: 웰컴 메시지는 위, 예시 질문만 입력창 바로 위에 ---------- */
+/* 챗봇 입력창(stChatInput)은 Streamlit이 자체적으로 화면/스크롤 영역 맨 아래에
+   붙는다. 예전엔 채팅 영역 전체를 justify-content:flex-end로 밀어서 예시 질문을
+   입력창에 붙였는데, 그러면 웰컴 메시지까지 같이 아래로 밀려서 제목 밑에 큰
+   빈 공간이 생겼다. 대신 채팅 영역은 위에서부터 쌓이게(기본 flex-start) 두고,
+   예시 질문 줄에만 margin-top:auto를 줘서 그것만 남는 공간을 밀어내며 맨
+   아래(입력창 바로 위)로 내려가게 한다. */
+div[class*="st-key-ai_chat_wrapper"] {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-bottom: 4px;
+    margin-top: 20px;
+}
+/* margin-top:auto는 실제 flex 자식(감싸는 stLayoutWrapper)에 줘야 남는 공간을
+   밀어내는 효과가 있다 - 안쪽 div에 주면 그 안쪽 div의 블록 부모 안에서만
+   적용돼서 아무 효과가 없다. */
+[data-testid="stLayoutWrapper"]:has(> div[class*="st-key-example_q_row"]) {
+    margin-top: auto !important;
+}
+/* Streamlit이 st.container를 stLayoutWrapper라는 감싸는 div로 한 번 더 감싸는데,
+   이 wrapper 자체가 flex:0(고정 크기)이라 안의 내용이 아무리 flex:1이어도 부모의
+   남는 세로 공간을 못 받는다. 이 wrapper도 같이 늘어나게 만든다. */
+[data-testid="stLayoutWrapper"]:has(> div[class*="st-key-ai_chat_wrapper"]) {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    display: flex !important;
+}
+/* flex 자식은 기본적으로 min-height:auto(=내용물 크기 밑으로는 절대 안 줄어듦)라서,
+   본문을 감싸는 최상위 stVerticalBlock까지 이 값을 0으로 풀어주지 않으면 답변이
+   길어질 때 그 크기만큼 전체 박스가 계속 늘어나 버려서(overflow-y:auto가 있어도
+   애초에 넘칠 일이 없어져서) 입력창을 밀어내거나 뚫고 나온다. */
+div[data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"] {
+    min-height: 0 !important;
+}
+
+/* ---------- 뱃지 스타일 pill (예시 질문 버튼 등) ---------- */
+/* st.columns()가 각 stColumn에 기본적으로 좌우 패딩(간격)을 넣어서, 부모
+   stHorizontalBlock의 gap을 줄여도 컬럼 자체 패딩 때문에 눈으로 보기엔 여전히
+   넓게 벌어져 보인다. 컬럼 패딩까지 같이 없애야 실제로 붙는다. */
+div[class*="st-key-example_q_row"] [data-testid="stHorizontalBlock"] {
+    gap: 0px !important;
+}
+div[class*="st-key-example_q_row"] [data-testid="stColumn"] {
+    padding: 0 !important;
+    margin-right: 7px !important;
+    width: auto !important;
+    flex: 0 0 auto !important;
+    min-width: 0 !important;
+}
+div[class*="st-key-example_q_"] .stButton > button {
+    border-radius: 7px !important;
+    background-color: transparent !important;
+    color: var(--athlepa-muted-text) !important;
+    border: 1px solid var(--athlepa-border) !important;
+    font-size: 0.68rem !important;
+    font-weight: 500 !important;
+    padding: 0.38rem 0.95rem !important;
+    min-height: auto !important;
+    line-height: 1.3 !important;
+}
+/* 버튼 라벨 텍스트는 실제로는 stMarkdownContainer 안의 <p> 태그에 들어있는데,
+   전역 규칙([data-testid="stMarkdownContainer"] p { font-size: 0.9rem })이 이
+   버튼의 font-size보다 더 구체적인 선택자라 그걸 덮어써 버려서, 버튼 자체의
+   font-size를 아무리 줄여도 글자 크기가 안 바뀌었다. inherit로 해도 중간의
+   stMarkdownContainer div 자체가 상속을 안 받고 있어서 소용없었고, p와 그
+   div 둘 다에 직접 같은 값을 못박아야 진짜로 작아진다. (채팅 메시지 14.4px,
+   입력창 13.6px보다는 작지만 읽을 수는 있는 정도로 맞춤) */
+div[class*="st-key-example_q_"] .stButton > button [data-testid="stMarkdownContainer"],
+div[class*="st-key-example_q_"] .stButton > button [data-testid="stMarkdownContainer"] p {
+    font-size: 0.68rem !important;
+    line-height: 1.3 !important;
+}
+div[class*="st-key-example_q_"] .stButton > button:hover {
+    color: var(--athlepa-primary) !important;
+    border-color: var(--athlepa-primary) !important;
+    background-color: var(--athlepa-secondary) !important;
+}
+
+/* ---------- 링크형(tertiary) 버튼 — "상세 보기 →" 같은 인라인 링크 ---------- */
+.stButton > button[kind="tertiary"] {
+    border: none !important;
+    background: transparent !important;
+    color: var(--athlepa-primary) !important;
+    font-size: 0.75rem !important;
+    font-weight: 500 !important;
+    padding: 0 !important;
+    min-height: auto !important;
+}
+.stButton > button[kind="tertiary"]:hover {
+    text-decoration: underline;
+    background: transparent !important;
+}
+
+/* ---------- 홈 화면: KPI stat 카드 ---------- */
+.stat-card-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 2px;
+}
+.stat-label {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--athlepa-muted-text);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+}
+.stat-value {
+    font-size: 1.3rem;
+    font-weight: 600;
+    color: var(--athlepa-foreground);
+    letter-spacing: -0.01em;
+}
+.stat-sub {
+    font-size: 11px;
+    color: var(--athlepa-muted-text);
+    margin-top: 2px;
+}
+.trend-pill {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 7px;
+    border-radius: 999px;
+    white-space: nowrap;
+}
+.trend-up { background: #ECFDF5; color: #059669; }
+.trend-down { background: #FEF2F2; color: #DC2626; }
+.trend-neutral { background: var(--athlepa-muted); color: var(--athlepa-muted-text); }
+
+/* ---------- 홈 화면: 최근 활동 피드 ---------- */
+.activity-item {
+    display: flex;
+    gap: 10px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--athlepa-border);
+}
+.activity-item:last-child { border-bottom: none; padding-bottom: 0; }
+.activity-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    margin-top: 6px;
+    flex-shrink: 0;
+}
+.dot-primary { background: var(--athlepa-primary); }
+.dot-amber { background: #F59E0B; }
+.dot-emerald { background: #34D399; }
+.activity-text { font-size: 11px; color: var(--athlepa-foreground); line-height: 1.5; }
+.activity-meta { font-size: 10px; color: var(--athlepa-muted-text); margin-top: 2px; }
+
+/* ---------- 홈 화면: 최근 캠페인 미니 테이블 ---------- */
+.segment-pill {
+    background: var(--athlepa-secondary);
+    color: var(--athlepa-secondary-text);
+    font-size: 10px;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 999px;
+    white-space: nowrap;
+}
+.mini-table { width: 100%; font-size: 11px; border-collapse: collapse; }
+.mini-table th {
+    text-align: left;
+    padding: 6px 10px;
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--athlepa-muted-text);
+    background: var(--athlepa-muted);
+}
+.mini-table td {
+    padding: 8px 10px;
+    border-top: 1px solid var(--athlepa-border);
+    color: var(--athlepa-muted-text);
+    vertical-align: middle;
+}
+
+/* ---------- 퍼널(구매 퍼널 / 회원가입→재구매) 진행바 ---------- */
+.funnel-row { margin-bottom: 14px; }
+.funnel-row:last-child { margin-bottom: 0; }
+.funnel-header {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-bottom: 5px; font-size: 12px;
+}
+.funnel-label { color: var(--athlepa-foreground); font-weight: 500; }
+.funnel-value { color: var(--athlepa-muted-text); font-size: 11px; }
+.funnel-track { background: var(--athlepa-muted); border-radius: 6px; height: 10px; overflow: hidden; }
+.funnel-fill { height: 100%; border-radius: 6px; transition: width 0.3s ease; }
+
+/* ---------- 자동화: 3단계 스텝 인디케이터 ---------- */
+.step-indicator { display: flex; align-items: center; margin-top: 20px; margin-bottom: 24px; }
+.step-item { display: flex; align-items: center; gap: 6px; }
+.step-circle {
+    width: 20px; height: 20px; border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 600; flex-shrink: 0;
+}
+.step-circle-active { background: var(--athlepa-primary); color: #ffffff; }
+.step-circle-pending { background: var(--athlepa-muted); color: var(--athlepa-muted-text); }
+.step-label { font-size: 12px; font-weight: 500; }
+.step-label-active { color: var(--athlepa-primary); }
+.step-label-done { color: var(--athlepa-foreground); }
+.step-label-pending { color: var(--athlepa-muted-text); }
+.step-line { width: 40px; height: 1px; margin: 0 10px; }
+.step-line-done { background: var(--athlepa-primary); }
+.step-line-pending { background: var(--athlepa-border); }
+
+/* ---------- 자동화: 요약 행 / 메시지 미리보기 ---------- */
+.summary-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 6px 0; border-bottom: 1px solid var(--athlepa-border); font-size: 12px;
+}
+.summary-row:last-child { border-bottom: none; }
+.summary-label { color: var(--athlepa-muted-text); font-size: 11px; }
+.summary-value { color: var(--athlepa-foreground); font-weight: 500; }
+.message-preview {
+    background: var(--athlepa-muted);
+    border: 1px solid var(--athlepa-border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: pre-line;
+    max-height: 180px;
+    overflow-y: auto;
+}
+.confirm-box {
+    display: flex; align-items: center; gap: 8px;
+    background: #ECFDF5; border: 1px solid #A7F3D0;
+    border-radius: 8px; padding: 10px 12px;
+}
+.confirm-box .dot {
+    width: 16px; height: 16px; border-radius: 50%; background: #10B981;
+    color: #fff; font-size: 10px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+
