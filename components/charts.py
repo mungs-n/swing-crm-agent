@@ -10,13 +10,12 @@ import pandas as pd
 
 from utils.rfm import calculate_rfm, assign_segment
 
-ACCENT = "#4C6EF5"
-PALE_BLUE = "#BAC8FF"
-POSITIVE = "#2F9E44"
-NEGATIVE = "#E03131"
-WARNING = "#E8590C"
-MALE_COLOR = "#4C6EF5"
-FEMALE_COLOR = "#F06595"
+ACCENT = "#7C3AED"
+PALE_PURPLE = "#C4B5FD"
+ORANGE = "#F97316"
+MALE_COLOR = "#C4B5FD"
+FEMALE_COLOR = "#7C3AED"
+PURPLE_SCALE = ["#F5F5F8", "#EDE9FE", "#DDD6FE", "#C4B5FD", "#A78BFA", "#8B5CF6", "#7C3AED", "#5B21B6"]
 
 GROUP_ICON_SVG = """
 <svg width="40" height="40" viewBox="0 0 24 24" fill="{color}">
@@ -40,42 +39,28 @@ div[class*="st-key-card-"] {
     transition: box-shadow 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
 }
 div[class*="st-key-card-"]:hover {
-    border-color: #4C6EF5 !important;
-    box-shadow: 0 6px 16px rgba(76, 110, 245, 0.18);
+    border-color: #7C3AED !important;
+    box-shadow: 0 6px 16px rgba(124, 58, 237, 0.18);
     transform: translateY(-2px);
 }
-/* 차트 제목 크기를 커스텀 랭킹 차트 제목(1.25rem)과 동일하게 맞춰서 섹션 전체 제목 크기를 통일 */
+/* 차트 제목 크기를 커스텀 랭킹 차트 제목과 동일하게 맞춰서 섹션 전체 제목 크기를 통일 */
 div[data-testid="stHeadingWithActionElements"] h3 {
-    font-size: 1.25rem !important;
+    font-size: 0.85rem !important;
+    font-weight: 600 !important;
 }
 /* 사이드바 기간 필터의 "최근 7일" 등 라디오 옵션 글씨 크기 축소 */
 section[data-testid="stSidebar"] div[role="radiogroup"] p {
     font-size: 13px !important;
-}
-/* 본문 상하 여백과 요소 사이 간격을 줄여서 한 탭 안의 차트가 스크롤 없이 더 잘 들어오도록 함 */
-div[data-testid="stMainBlockContainer"] {
-    padding-top: 2rem !important;
-    padding-bottom: 1rem !important;
-}
-div[data-testid="stMain"] div[data-testid="stVerticalBlock"] {
-    gap: 0.6rem !important;
-}
-div[data-testid="stMain"] h1 {
-    margin-bottom: 0 !important;
-}
-div[data-testid="stHeadingWithActionElements"] {
-    margin-top: 0 !important;
-    margin-bottom: 0 !important;
 }
 </style>
 """
 
 SEGMENT_ORDER = ["VIP", "충성 고객", "이탈 위험", "휴면"]
 SEGMENT_COLORS = {
-    "VIP": "#4C6EF5",
-    "충성 고객": "#66D9E8",
-    "이탈 위험": "#FFA94D",
-    "휴면": "#CED4DA",
+    "VIP": "#7C3AED",
+    "충성 고객": "#A78BFA",
+    "이탈 위험": "#C4B5FD",
+    "휴면": "#DDD6FE",
 }
 
 CHANNEL_KR = {
@@ -152,14 +137,18 @@ def compute_kpis(cur_orders, cur_events, prev_orders, prev_events):
 
 def _kpi_card(label, value_text, delta, unit="%", key=None):
     """전월대비 배지가 포함된 텍스트형 KPI 카드"""
-    color = POSITIVE if delta >= 0 else NEGATIVE
-    arrow = "▲" if delta >= 0 else "▼"
+    if delta > 0:
+        cls, arrow = "trend-up", "▲"
+    elif delta < 0:
+        cls, arrow = "trend-down", "▼"
+    else:
+        cls, arrow = "trend-neutral", ""
+    trend_html = f"<span class='trend-pill {cls}'>{arrow} {abs(delta):.1f}{unit}</span>"
     with st.container(border=True, key=key):
         st.markdown(
-            f"<div style='color:#868E96;font-size:0.85rem'>{label}</div>"
-            f"<div style='font-size:1.6rem;font-weight:700;margin-top:2px'>{value_text} "
-            f"<span style='font-size:0.8rem;font-weight:600;color:{color}'>{arrow} {abs(delta):.1f}{unit}</span></div>"
-            f"<div style='color:#ADB5BD;font-size:0.72rem'>이전 기간 대비</div>",
+            f"<div class='stat-card-top'><span class='stat-label'>{label}</span>{trend_html}</div>"
+            f"<div class='stat-value'>{value_text}</div>"
+            f"<div class='stat-sub'>이전 기간 대비</div>",
             unsafe_allow_html=True,
         )
 
@@ -188,7 +177,7 @@ def render_gmv_chart(orders, granularity="월별"):
     if orders.empty:
         st.subheader(
             "GMV & 주문 수 추이",
-            help="막대는 구간별 GMV(총매출), 선은 주문 건수예요. 진한 파란 막대는 가장 최근 구간이고 나머지는 이전 구간이에요.",
+            help="막대는 구간별 GMV(총매출), 선은 주문 건수예요. 진한 보라 막대는 가장 최근 구간이고 나머지는 이전 구간이에요.",
         )
         st.info("선택한 기간에 데이터가 없습니다.")
         return
@@ -203,7 +192,7 @@ def render_gmv_chart(orders, granularity="월별"):
         .reset_index()
     )
     grouped["label"] = grouped["order_date"].dt.strftime(label_fmt)
-    bar_colors = [ACCENT if i == len(grouped) - 1 else PALE_BLUE for i in range(len(grouped))]
+    bar_colors = [ACCENT if i == len(grouped) - 1 else PALE_PURPLE for i in range(len(grouped))]
 
     st.subheader(
         "GMV & 주문 수 추이",
@@ -222,14 +211,16 @@ def render_gmv_chart(orders, granularity="월별"):
             name="주문 수",
             mode="lines+markers",
             yaxis="y2",
-            line=dict(color="#FA5252"),
+            line=dict(color=ORANGE, width=2, dash="dash"),
+            marker=dict(size=6, color=ORANGE),
             hovertemplate="%{x}<br>주문 %{y:,}건<extra></extra>",
         )
     )
     fig.update_layout(
         height=260,
-        yaxis=dict(title="GMV (원)"),
+        yaxis=dict(title="GMV (원)", gridcolor="#F0EDFB"),
         yaxis2=dict(title="주문 수", overlaying="y", side="right"),
+        xaxis=dict(showgrid=False),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
         margin=dict(t=30),
         plot_bgcolor="rgba(0,0,0,0)",
@@ -257,7 +248,7 @@ def _render_ranked_bars(title, series, colors=None, value_fmt=None, icon=None):
     """랭킹형 가로 막대 리스트 (라벨-막대-값 순, 값 큰 순 정렬). colors 미지정 시 1위만 강조색"""
     st.markdown(
         f"<div style='display:flex;align-items:center;gap:8px;margin-bottom:4px'>{icon or ''}"
-        f"<span style='font-size:1.25rem;font-weight:600'>{title}</span></div>",
+        f"<span style='font-size:0.85rem;font-weight:600'>{title}</span></div>",
         unsafe_allow_html=True,
     )
 
@@ -269,7 +260,7 @@ def _render_ranked_bars(title, series, colors=None, value_fmt=None, icon=None):
     if isinstance(colors, dict):
         bar_colors = [colors[k] for k in data.index]
     else:
-        bar_colors = [ACCENT] + [PALE_BLUE] * (len(data) - 1)
+        bar_colors = [ACCENT] + [PALE_PURPLE] * (len(data) - 1)
     data = data.iloc[::-1]
     bar_colors = bar_colors[::-1]
 
@@ -308,7 +299,7 @@ def render_gender_split(users):
         return
 
     st.markdown(
-        "<div style='font-size:1.25rem;font-weight:600;margin-bottom:4px'>성별 분포</div>",
+        "<div style='font-size:0.85rem;font-weight:600;margin-bottom:4px'>성별 분포</div>",
         unsafe_allow_html=True,
     )
 
@@ -378,9 +369,9 @@ def render_customer_profile(users, events):
         with st.container(border=True, key="card-total-customers"):
             st.markdown(
                 f"<div style='text-align:center'>{GROUP_ICON_SVG.format(color=ACCENT)}</div>"
-                f"<div style='text-align:center;color:#868E96;font-size:0.85rem;margin-top:6px'>기간 내 활동 고객 수</div>"
-                f"<div style='text-align:center;font-size:2rem;font-weight:800;margin-top:4px'>{len(users_f):,}명</div>"
-                f"<div style='text-align:center;color:#ADB5BD;font-size:0.7rem;margin-top:4px'>구매 여부와 무관하게 방문 등 활동이 있었던 고객</div>",
+                f"<div style='text-align:center;color:var(--athlepa-muted-text);font-size:0.78rem;margin-top:6px'>기간 내 활동 고객 수</div>"
+                f"<div style='text-align:center;font-size:1.5rem;font-weight:700;margin-top:4px'>{len(users_f):,}명</div>"
+                f"<div style='text-align:center;color:var(--athlepa-muted-text);font-size:0.68rem;margin-top:4px'>구매 여부와 무관하게 방문 등 활동이 있었던 고객</div>",
                 unsafe_allow_html=True,
             )
     with col_gender:
@@ -403,7 +394,7 @@ def render_segment_ranking(orders):
 def render_category_ranking(orders):
     """카테고리별 매출 랭킹 (항목이 많아 세로 막대로 넓게 표시)"""
     st.markdown(
-        "<span style='font-size:1.25rem;font-weight:600'>카테고리별 매출</span>",
+        "<span style='font-size:0.85rem;font-weight:600'>카테고리별 매출</span>",
         unsafe_allow_html=True,
     )
     data = orders.groupby("category")["total_amount"].sum().sort_values(ascending=False)
@@ -411,7 +402,7 @@ def render_category_ranking(orders):
         st.info("표시할 데이터가 없습니다.")
         return
 
-    bar_colors = [ACCENT] + [PALE_BLUE] * (len(data) - 1)
+    bar_colors = [ACCENT] + [PALE_PURPLE] * (len(data) - 1)
     text = [f"₩{v / 1_000_000:.1f}M" for v in data.values]
 
     fig = go.Figure(
@@ -455,16 +446,39 @@ def render_rfm_scatter(orders):
         color="Recency",
         size="Monetary",
         hover_data=["user_id", "segment"],
-        color_continuous_scale="RdYlBu",
+        color_continuous_scale=[PALE_PURPLE, ACCENT],
         labels={"Frequency": "구매 빈도", "Monetary": "구매 금액", "Recency": "최근성(일)"},
     )
-    fig.update_layout(height=320, margin=dict(t=30))
+    fig.update_traces(marker=dict(opacity=0.75, line=dict(width=0)))
+    fig.update_layout(
+        height=320,
+        margin=dict(t=30),
+        plot_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(gridcolor="#F0EDFB"),
+        yaxis=dict(gridcolor="#F0EDFB"),
+    )
     st.plotly_chart(fig, width='stretch')
 
 
+def _render_funnel_bars(labels, values, color):
+    """단계별 진행률을 라운드형 진행 바 목록으로 표시 (첫 단계 대비 도달 비율만큼 채움)"""
+    base = values[0] if values[0] else 1
+    rows_html = ""
+    for label, v in zip(labels, values):
+        pct = v / base * 100
+        rows_html += (
+            "<div class='funnel-row'>"
+            f"<div class='funnel-header'><span class='funnel-label'>{label}</span>"
+            f"<span class='funnel-value'>{v:,}명 ({pct:.1f}%)</span></div>"
+            f"<div class='funnel-track'><div class='funnel-fill' style='width:{pct:.2f}%;background:{color}'></div></div>"
+            "</div>"
+        )
+    st.markdown(rows_html, unsafe_allow_html=True)
+
+
 def render_funnel(events):
-    """구매 퍼널 (방문 → 상품조회 → 장바구니 → 구매). 각 단계를 막대 하나로 두고, 최초 방문자 수 대비
-    도달 비율만큼 채워서 쌓는 누적(스택) 막대차트로 표시"""
+    """구매 퍼널 (방문 → 상품조회 → 장바구니 → 구매). 각 단계를 최초 방문자 수 대비
+    도달 비율만큼 채운 진행 바로 표시"""
     stages = [
         ("page_view", "방문"),
         ("product_view", "상품조회"),
@@ -474,64 +488,25 @@ def render_funnel(events):
     values = [events.loc[events["event_type"] == key, "session_id"].nunique() for key, _ in stages]
     labels = [label for _, label in stages]
 
-    drop_offs = [0.0] + [
-        (values[i - 1] - values[i]) / values[i - 1] if values[i - 1] else 0.0 for i in range(1, len(values))
-    ]
-    worst_idx = max(range(1, len(values)), key=lambda i: drop_offs[i])
-
-    base = values[0] if values[0] else 1
-    reached_pct = [v / base * 100 for v in values]
-    remaining_pct = [100 - p for p in reached_pct]
-    remaining_colors = [WARNING if i == worst_idx else "#E9ECEF" for i in range(len(values))]
-
     st.subheader("구매 퍼널")
+    _render_funnel_bars(labels, values, ACCENT)
 
-    fig = go.Figure()
-    fig.add_bar(
-        x=labels,
-        y=reached_pct,
-        name="도달",
-        marker_color=ACCENT,
-        text=[f"{v:,}명 ({p:.1f}%)" for v, p in zip(values, reached_pct)],
-        textposition="inside",
-        hovertemplate="%{x}<br>%{text}<extra></extra>",
-    )
-    fig.add_bar(
-        x=labels,
-        y=remaining_pct,
-        name="이탈",
-        marker=dict(color=remaining_colors),
-        hovertemplate="%{x}<br>이탈 %{y:.1f}%<extra></extra>",
-    )
-    fig.update_layout(
-        barmode="stack",
-        height=240,
-        yaxis=dict(title="비율 (%)", range=[0, 100]),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
-        margin=dict(t=30),
-        plot_bgcolor="rgba(0,0,0,0)",
-    )
-    st.plotly_chart(fig, width='stretch')
-
-    # 단계 전환마다 전환율을 표로 같이 보여줌 (세션 내 이벤트가 같은 시각으로 기록돼 있어 소요시간은 의미가 없어 제외)
-    rows = [
-        {
-            "단계": f"{stages[i - 1][1]} → {stages[i][1]}",
-            "전환율": f"{(values[i] / values[i - 1] * 100) if values[i - 1] else 0.0:.1f}%",
-        }
+    # 단계 전환마다 전환율을 같이 보여줌 (세션 내 이벤트가 같은 시각으로 기록돼 있어 소요시간은 의미가 없어 제외)
+    rows_html = "".join(
+        f"<div class='summary-row'><span class='summary-label'>{stages[i - 1][1]} → {stages[i][1]}</span>"
+        f"<span class='summary-value'>{(values[i] / values[i - 1] * 100) if values[i - 1] else 0.0:.1f}%</span></div>"
         for i in range(1, len(stages))
-    ]
-    st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
+    )
+    st.markdown(f"<div style='margin-top:16px'>{rows_html}</div>", unsafe_allow_html=True)
 
 
 def render_repeat_funnel(users, orders, start, end):
     """회원가입 → 첫 구매 → 재구매 퍼널. '기간 필터'에서 고른 기간에 가입한 고객 코호트를 기준으로
     (가입일이 그 기간에 속하는 고객만), 전체 주문 이력에서 첫 구매·재구매까지 도달했는지 추적"""
-    st.markdown(
-        "<div style='font-size:1.25rem;font-weight:600;margin-bottom:4px'>회원가입 → 첫 구매 → 재구매</div>",
-        unsafe_allow_html=True,
+    st.subheader(
+        "회원가입 → 첫 구매 → 재구매",
+        help=f"기간 필터에서 고른 가입일({start} ~ {end}) 기준 고객 코호트를, 이후 전체 주문 이력으로 추적한 결과예요.",
     )
-    st.caption(f"기간 필터에서 고른 가입일({start} ~ {end}) 기준 고객 코호트를, 이후 전체 주문 이력으로 추적한 결과예요.")
 
     cohort_users = users[(users["signup_date"].dt.date >= start) & (users["signup_date"].dt.date <= end)]
     cohort_ids = set(cohort_users["user_id"])
@@ -551,42 +526,7 @@ def render_repeat_funnel(users, orders, start, end):
     labels = ["회원가입", "첫 구매", "재구매"]
     values = [len(cohort_ids), len(first_purchase_ids), len(repeat_ids)]
 
-    drop_offs = [0.0] + [
-        (values[i - 1] - values[i]) / values[i - 1] if values[i - 1] else 0.0 for i in range(1, len(values))
-    ]
-    worst_idx = max(range(1, len(values)), key=lambda i: drop_offs[i])
-
-    base = values[0] if values[0] else 1
-    reached_pct = [v / base * 100 for v in values]
-    remaining_pct = [100 - p for p in reached_pct]
-    remaining_colors = [WARNING if i == worst_idx else "#E9ECEF" for i in range(len(values))]
-
-    fig = go.Figure()
-    fig.add_bar(
-        x=labels,
-        y=reached_pct,
-        name="도달",
-        marker_color=ACCENT,
-        text=[f"{v:,}명 ({p:.1f}%)" for v, p in zip(values, reached_pct)],
-        textposition="inside",
-        hovertemplate="%{x}<br>%{text}<extra></extra>",
-    )
-    fig.add_bar(
-        x=labels,
-        y=remaining_pct,
-        name="이탈",
-        marker=dict(color=remaining_colors),
-        hovertemplate="%{x}<br>이탈 %{y:.1f}%<extra></extra>",
-    )
-    fig.update_layout(
-        barmode="stack",
-        height=240,
-        yaxis=dict(title="비율 (%)", range=[0, 100]),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
-        margin=dict(t=30),
-        plot_bgcolor="rgba(0,0,0,0)",
-    )
-    st.plotly_chart(fig, width='stretch')
+    _render_funnel_bars(labels, values, ORANGE)
 
     # 회원가입 -> 첫 구매, 첫 구매 -> 재구매 전환율 및 소요시간(평균/중앙값)
     signup_dates = cohort_users.set_index("user_id")["signup_date"]
@@ -608,17 +548,24 @@ def render_repeat_funnel(users, orders, start, end):
         {
             "단계": "회원가입 → 첫 구매",
             "전환율": f"{(values[1] / values[0] * 100) if values[0] else 0:.1f}%",
-            "평균 소요시간": _fmt_duration(to_first.mean() if not to_first.empty else float("nan")),
-            "중앙값 소요시간": _fmt_duration(to_first.median() if not to_first.empty else float("nan")),
+            "평균": _fmt_duration(to_first.mean() if not to_first.empty else float("nan")),
+            "중앙값": _fmt_duration(to_first.median() if not to_first.empty else float("nan")),
         },
         {
             "단계": "첫 구매 → 재구매",
             "전환율": f"{(values[2] / values[1] * 100) if values[1] else 0:.1f}%",
-            "평균 소요시간": _fmt_duration(to_repeat.mean() if not to_repeat.empty else float("nan")),
-            "중앙값 소요시간": _fmt_duration(to_repeat.median() if not to_repeat.empty else float("nan")),
+            "평균": _fmt_duration(to_repeat.mean() if not to_repeat.empty else float("nan")),
+            "중앙값": _fmt_duration(to_repeat.median() if not to_repeat.empty else float("nan")),
         },
     ]
-    st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
+    rows_html = "".join(
+        f"<div class='summary-row'><span class='summary-label'>{r['단계']}</span>"
+        f"<span><span class='summary-value'>{r['전환율']}</span>"
+        f"<span style='color:var(--athlepa-muted-text);font-size:11px;margin-left:10px'>"
+        f"평균 {r['평균']} · 중앙값 {r['중앙값']}</span></span></div>"
+        for r in rows
+    )
+    st.markdown(f"<div style='margin-top:16px'>{rows_html}</div>", unsafe_allow_html=True)
 
 
 def render_cohort(users, orders_full, start, end):
@@ -682,10 +629,14 @@ def render_cohort(users, orders_full, start, end):
             z=retention.values,
             x=[f"{i}개월차" for i in retention.columns],
             y=[str(i) for i in retention.index],
-            colorscale="YlOrRd",
+            colorscale=[[i / (len(PURPLE_SCALE) - 1), c] for i, c in enumerate(PURPLE_SCALE)],
             text=text_matrix,
             texttemplate="%{text}",
+            textfont=dict(size=12),
             hoverongaps=False,
+            showscale=False,
+            xgap=4,
+            ygap=4,
         )
     )
     fig.update_layout(
@@ -695,8 +646,17 @@ def render_cohort(users, orders_full, start, end):
         # 눈금을 그리는 경우가 있어, 항상 카테고리(문자열) 축으로 명시해서 막는다.
         xaxis=dict(type="category"),
         yaxis=dict(type="category"),
+        plot_bgcolor="rgba(0,0,0,0)",
     )
     st.plotly_chart(fig, width='stretch')
+
+    st.markdown(
+        "<div style='display:flex;align-items:center;gap:8px;margin-top:-8px'>"
+        "<span style='font-size:11px;color:var(--athlepa-muted-text)'>낮음</span>"
+        f"<div style='flex:1;height:8px;border-radius:4px;background:linear-gradient(to right,{','.join(PURPLE_SCALE)})'></div>"
+        "<span style='font-size:11px;color:var(--athlepa-muted-text)'>높음</span></div>",
+        unsafe_allow_html=True,
+    )
 
 
 DATE_PRESETS = {
@@ -774,19 +734,6 @@ def render_charts():
     if orders_f.empty or events_f.empty:
         st.warning("선택한 기간에 데이터가 없습니다.")
         return
-
-    if st.button("🤖 이 기간으로 AI 인사이트 보기", type="primary"):
-        # date_preset/custom_start_date/custom_end_date는 AI 인사이트 페이지와 동일한
-        # key를 쓰고 있지만, Streamlit은 st.switch_page로 페이지를 이동하면 위젯에
-        # 연결된 session_state 값을 초기화해버린다. 그래서 위젯 key가 아닌 별도의
-        # "carry" key로 값을 직접 들고 넘어가서, AI 인사이트 페이지 쪽에서 위젯을
-        # 만들기 전에 그 값을 다시 심어주는 방식으로 기간을 그대로 유지한다.
-        st.session_state["ai_carry_date_preset"] = date_choice
-        if date_choice == "직접 선택":
-            st.session_state["ai_carry_custom_start"] = st.session_state.get("custom_start_date")
-            st.session_state["ai_carry_custom_end"] = st.session_state.get("custom_end_date")
-        st.session_state["ai_auto_trigger"] = True
-        st.switch_page("pages/2_AI_Insights.py")
 
     rfm = assign_segment(calculate_rfm(orders_f.copy()))
 

@@ -8,25 +8,34 @@ import sendgrid
 from sendgrid.helpers.mail import Mail
 import pandas as pd
 import os
-import json
-from datetime import datetime, time as dtime
+from datetime import datetime
+
+try:
+    from zoneinfo import ZoneInfo
+    KST = ZoneInfo("Asia/Seoul")
+except ImportError:
+    KST = None
 
 
 HISTORY_FILE = "data/campaign_history.csv"
 TEST_RECIPIENTS_FILE = "data/test_recipients.csv"
-SCHEDULE_FILE = "data/campaign_schedule.json"
-
-WEEKDAY_LABELS = ["월", "화", "수", "목", "금", "토", "일"]
+SCHEDULED_FILE = "data/scheduled_emails.csv"
 
 
 def load_test_recipients():
     try:
-        return pd.read_csv(TEST_RECIPIENTS_FILE)
+        return pd.read_csv(TEST_RECIPIENTS_FILE, encoding="utf-8-sig")
     except FileNotFoundError:
         return pd.DataFrame(columns=["name", "email"])
+    except UnicodeDecodeError:
+        # 엑셀에서 저장하면 한글 Windows 기본 인코딩(CP949)으로 저장되는 경우가 있음
+        return pd.read_csv(TEST_RECIPIENTS_FILE, encoding="cp949")
 
 
-def send_email(to_email, subject, body):
+def send_email(to_email, subject, body, send_at: int | None = None):
+    """SendGrid로 이메일을 보낸다. send_at(미래 시각의 unix timestamp)을 주면 지금 API를
+    호출은 하지만, 실제 발송은 SendGrid가 그 시각에 알아서 처리한다 (예약 발송,
+    SendGrid 자체 제약으로 최대 72시간 이내만 가능)."""
     sg = sendgrid.SendGridAPIClient(api_key=os.environ.get("SENDGRID_API_KEY"))
     message = Mail(
         from_email=os.environ.get("FROM_EMAIL"),
@@ -34,6 +43,8 @@ def send_email(to_email, subject, body):
         subject=subject,
         html_content=body.replace("\n", "<br>")
     )
+    if send_at is not None:
+        message.send_at = send_at
     response = sg.send(message)
     return response.status_code
 
@@ -54,170 +65,46 @@ def save_history(segment, copy, count, status):
     df.to_csv(HISTORY_FILE, index=False, encoding="utf-8-sig")
 
 
-def load_schedule():
+def save_scheduled_emails(segment, subject, recipients_emails, send_at_dt):
+    new_rows = pd.DataFrame([{
+        "등록일시": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "발송예정일시": send_at_dt.strftime("%Y-%m-%d %H:%M"),
+        "받는사람": email,
+        "세그먼트": segment,
+        "제목": subject,
+    } for email in recipients_emails])
     try:
-        with open(SCHEDULE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+        df = pd.read_csv(SCHEDULED_FILE, encoding="utf-8-sig")
     except FileNotFoundError:
-        return None
+        df = pd.DataFrame(columns=new_rows.columns)
+    df = pd.concat([df, new_rows], ignore_index=True)
+    df.to_csv(SCHEDULED_FILE, index=False, encoding="utf-8-sig")
 
 
-def save_schedule(schedule):
-    with open(SCHEDULE_FILE, "w", encoding="utf-8") as f:
-        json.dump(schedule, f, ensure_ascii=False, indent=2)
-
-
-def render_schedule_settings(copy, segment, count):
-    st.subheader("⏰ 예약 발송 설정")
-    st.caption(
-        "여기서 설정하고 저장한 뒤 **git commit & push까지 해야** "
-        "GitHub Actions가 그 설정을 보고 자동 발송을 실행해요."
-    )
-
-    existing = load_schedule()
-
-    with st.form("schedule_form"):
-        col1, col2 = st.columns(2)
-        with col1:
-            start_date = st.date_input(
-                "시작일",
-                value=datetime.strptime(existing["start_date"], "%Y-%m-%d").date()
-                if existing else datetime.now().date()
-            )
-            start_time = st.time_input(
-                "발송 시작 시간",
-                value=dtime.fromisoformat(existing["start_time"]) if existing else dtime(9, 0)
-            )
-        with col2:
-            end_date = st.date_input(
-                "종료일",
-                value=datetime.strptime(existing["end_date"], "%Y-%m-%d").date()
-                if existing else datetime.now().date()
-            )
-            end_time = st.time_input(
-                "발송 종료 시간",
-                value=dtime.fromisoformat(existing["end_time"]) if existing else dtime(20, 0)
-            )
-
-        selected_days = st.multiselect(
-            "발송 요일",
-            options=WEEKDAY_LABELS,
-            default=existing["days"] if existing else WEEKDAY_LABELS[:5]
-        )
-
-        submitted = st.form_submit_button("💾 예약 저장", type="primary")
-
-        if submitted:
-            if not selected_days:
-                st.error("발송 요일을 하나 이상 선택해주세요.")
-            else:
-                schedule = {
-                    "segment": segment,
-                    "copy": copy,
-                    "count": count,
-                    "start_date": start_date.strftime("%Y-%m-%d"),
-                    "end_date": end_date.strftime("%Y-%m-%d"),
-                    "start_time": start_time.strftime("%H:%M"),
-                    "end_time": end_time.strftime("%H:%M"),
-                    "days": selected_days,
-                    "sent_dates": existing["sent_dates"] if existing else []
-                }
-                save_schedule(schedule)
-                st.success(
-                    "✅ 예약 설정 저장 완료! "
-                    "터미널에서 git add/commit/push까지 해야 실제로 자동 발송이 작동해요."
-                )
-
-    if existing:
-        st.caption(
-            f"현재 저장된 예약: **{existing['days']}요일**, "
-            f"**{existing['start_time']} ~ {existing['end_time']}**, "
-            f"**{existing['start_date']} ~ {existing['end_date']}**"
-        )
-
-
-def render_email_sender():
-    st.subheader("📤 발송")
-
-    if "generated_copy" not in st.session_state:
-        st.info("위에서 AI 카피를 먼저 생성해주세요.")
-        return
-
-    copy = st.session_state["generated_copy"]
-    segment = st.session_state["selected_segment"]
-    count = st.session_state["target_count"]
-
-    test_email = st.text_input(
-        "테스트 발송 이메일",
-        placeholder="본인 이메일 주소 입력"
-    )
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        if st.button("📧 테스트 발송", use_container_width=True):
-            if test_email:
-                try:
-                    lines = copy.split("\n")
-                    subject = lines[0].replace("제목: ", "").strip()
-                    body = "\n".join(lines[2:]).replace("본문: ", "").strip()
-                    status = send_email(test_email, subject, body)
-                    if status == 202:
-                        st.success(f"✅ 테스트 이메일 발송 완료 → {test_email}")
-                        save_history(segment, copy, 1, "테스트 발송")
-                except Exception as e:
-                    st.error(f"발송 실패: {e}")
-            else:
-                st.warning("이메일 주소를 입력해주세요.")
-
-    with col2:
-        if st.button(f"🚀 전체 발송 ({count}명)", use_container_width=True, type="primary"):
-            recipients = load_test_recipients()
-
-            if recipients.empty:
-                st.warning(
-                    "data/test_recipients.csv 에 등록된 테스트 수신자가 없습니다. "
-                    "name,email 컬럼으로 팀원 이메일을 등록해주세요."
-                )
-            else:
-                lines = copy.split("\n")
-                subject = lines[0].replace("제목: ", "").strip()
-                body = "\n".join(lines[2:]).replace("본문: ", "").strip()
-
-                success_count = 0
-                fail_count = 0
-                total = len(recipients)
-                progress_bar = st.progress(0)
-
-                for i, row in recipients.iterrows():
-                    try:
-                        status = send_email(row["email"], subject, body)
-                        if status == 202:
-                            success_count += 1
-                        else:
-                            fail_count += 1
-                    except Exception:
-                        fail_count += 1
-                    progress_bar.progress((i + 1) / total)
-
-                st.success(
-                    f"✅ 전체 발송 완료: 테스트 수신자 {total}명 중 {success_count}명 성공"
-                    f"{f', {fail_count}명 실패' if fail_count else ''} "
-                    f"(실제 서비스 기준 대상 세그먼트: {count}명)"
-                )
-                save_history(
-                    segment,
-                    copy,
-                    total,
-                    f"전체 발송 완료 (테스트 {total}명 중 {success_count}명 성공)"
-                )
-
-    st.markdown("---")
-    render_schedule_settings(copy, segment, count)
-
-    st.subheader("📋 발송 이력")
+def render_history():
+    """발송 이력 - 예약된 목록 / 발송 완료 두 탭으로 나눠서 보여준다."""
     try:
-        history = pd.read_csv(HISTORY_FILE)
-        st.dataframe(history, use_container_width=True)
+        scheduled_df = pd.read_csv(SCHEDULED_FILE, encoding="utf-8-sig")
     except FileNotFoundError:
-        st.info("아직 발송 이력이 없습니다.")
+        scheduled_df = pd.DataFrame(columns=["등록일시", "발송예정일시", "받는사람", "세그먼트", "제목"])
+
+    try:
+        history_df = pd.read_csv(HISTORY_FILE, encoding="utf-8-sig")
+    except FileNotFoundError:
+        history_df = pd.DataFrame(columns=["발송일시", "세그먼트", "대상 인원", "메시지 요약", "상태"])
+    completed_df = history_df[~history_df["상태"].astype(str).str.contains("예약")] if not history_df.empty else history_df
+
+    with st.expander(f"발송 이력 — 예약 {len(scheduled_df)} · 완료 {len(completed_df)}", expanded=False):
+        tab_scheduled, tab_completed = st.tabs([
+            f"예약된 목록 ({len(scheduled_df)})", f"발송 완료 ({len(completed_df)})",
+        ])
+        with tab_scheduled:
+            if scheduled_df.empty:
+                st.caption("아직 예약된 이메일이 없습니다.")
+            else:
+                st.dataframe(scheduled_df.iloc[::-1], use_container_width=True, hide_index=True)
+        with tab_completed:
+            if completed_df.empty:
+                st.caption("아직 발송 이력이 없습니다.")
+            else:
+                st.dataframe(completed_df.iloc[::-1], use_container_width=True, hide_index=True)
