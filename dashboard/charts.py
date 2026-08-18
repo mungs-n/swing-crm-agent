@@ -53,6 +53,14 @@ div[data-testid="stHeadingWithActionElements"] h3 {
 section[data-testid="stSidebar"] div[role="radiogroup"] p {
     font-size: 13px !important;
 }
+/* KPI 카드 4개를 스크롤해도 항상 상단에 보이게 고정 */
+div[class*="st-key-kpi-sticky-row"] {
+    position: sticky;
+    top: 0;
+    z-index: 999;
+    background: #FFFFFF;
+    padding: 8px 0 4px 0;
+}
 </style>
 """
 
@@ -150,19 +158,20 @@ def render_kpi_cards(orders, events, prev_orders, prev_events):
     """KPI 카드 4개 (GMV / AOV / 활성 고객 수 / 구매 전환율)"""
     kpi = compute_kpis(orders, events, prev_orders, prev_events)
 
-    row = st.columns(4)
-    with row[0]:
-        v, d = kpi["gmv"]
-        _kpi_card("GMV", fmt_amount(v), d, key="card-kpi-gmv")
-    with row[1]:
-        v, d = kpi["aov"]
-        _kpi_card("AOV", fmt_amount(v, scaled=False), d, key="card-kpi-aov")
-    with row[2]:
-        v, d = kpi["active_users"]
-        _kpi_card("활성 고객 수", f"{v:,}명", d, key="card-kpi-active")
-    with row[3]:
-        v, d = kpi["conversion"]
-        _kpi_card("구매 전환율", f"{v:.1f}%", d, unit="%p", key="card-kpi-conv")
+    with st.container(key="kpi-sticky-row"):
+        row = st.columns(4)
+        with row[0]:
+            v, d = kpi["gmv"]
+            _kpi_card("GMV", fmt_amount(v), d, key="card-kpi-gmv")
+        with row[1]:
+            v, d = kpi["aov"]
+            _kpi_card("AOV", fmt_amount(v, scaled=False), d, key="card-kpi-aov")
+        with row[2]:
+            v, d = kpi["active_users"]
+            _kpi_card("활성 고객 수", f"{v:,}명", d, key="card-kpi-active")
+        with row[3]:
+            v, d = kpi["conversion"]
+            _kpi_card("구매 전환율", f"{v:.1f}%", d, unit="%p", key="card-kpi-conv")
 
 
 def render_gmv_chart(orders, granularity="월별"):
@@ -378,6 +387,102 @@ def render_customer_profile(users, events):
         render_persona_ranking(users_f)
 
 
+def render_activity_kpis(events):
+    """DAU/WAU/MAU — events 기준 일/주/월 활성 사용자 수. 각각 바로 직전 같은 길이
+    기간과 비교한 증감률도 같이 보여준다."""
+    if events.empty:
+        return
+    max_date = events["timestamp"].max()
+
+    def _active(days_back, offset=0):
+        end = (max_date - pd.Timedelta(days=offset)).date()
+        start = end - pd.Timedelta(days=days_back - 1)
+        window = events[(events["timestamp"].dt.date >= start) & (events["timestamp"].dt.date <= end)]
+        return window["user_id"].nunique()
+
+    dau, dau_prev = _active(1), _active(1, offset=1)
+    wau, wau_prev = _active(7), _active(7, offset=7)
+    mau, mau_prev = _active(30), _active(30, offset=30)
+
+    st.markdown(
+        "<div style='font-size:0.85rem;font-weight:600;margin:16px 0 4px'>활성 사용자 지표</div>",
+        unsafe_allow_html=True,
+    )
+    row = st.columns(3)
+    with row[0]:
+        _kpi_card("DAU (일간)", f"{dau:,}명", _pct_delta(dau, dau_prev), key="card-dau")
+    with row[1]:
+        _kpi_card("WAU (주간)", f"{wau:,}명", _pct_delta(wau, wau_prev), key="card-wau")
+    with row[2]:
+        _kpi_card("MAU (월간)", f"{mau:,}명", _pct_delta(mau, mau_prev), key="card-mau")
+
+
+def render_insight_cards(orders_period, events_period, orders_full, rfm):
+    """매출을 높이는 방법 / 기간 평균 대비 성과 / 이탈 원인 — 세 가지 실행 인사이트.
+    '경쟁사 대비 성과'는 실제 경쟁사 데이터가 없어서, 대신 전체 기간 평균을 기준선으로
+    써서 지금 선택한 기간이 그보다 잘하고 있는지를 정직하게 보여준다(가짜 숫자 대신)."""
+    st.markdown(
+        "<div style='font-size:0.85rem;font-weight:600;margin:16px 0 8px'>인사이트</div>",
+        unsafe_allow_html=True,
+    )
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        with st.container(border=True):
+            st.markdown("<div class='stat-label'>매출을 높이려면</div>", unsafe_allow_html=True)
+            if orders_period.empty or rfm.empty or rfm["segment"].iloc[0] == "표본 부족":
+                st.caption("표본이 부족해 계산할 수 없습니다.")
+            else:
+                top_segment = rfm.groupby("segment", observed=True)["Monetary"].sum().idxmax()
+                top_category = orders_period.groupby("category")["total_amount"].sum().idxmax()
+                st.markdown(
+                    f"<div style='font-size:1.05rem;font-weight:700;margin:6px 0'>{top_segment} · {top_category}</div>"
+                    "<div style='font-size:0.75rem;color:var(--athlepa-muted-text)'>"
+                    "이 세그먼트·카테고리 조합의 매출 기여가 가장 커요. 타겟 캠페인을 여기에 먼저 배분해보세요.</div>",
+                    unsafe_allow_html=True,
+                )
+
+    with col2:
+        with st.container(border=True):
+            st.markdown("<div class='stat-label'>기간 평균 대비 성과</div>", unsafe_allow_html=True)
+            if orders_full.empty or orders_period.empty:
+                st.caption("데이터가 부족합니다.")
+            else:
+                aov_period = orders_period["total_amount"].mean()
+                aov_baseline = orders_full["total_amount"].mean()
+                diff_pct = (aov_period - aov_baseline) / aov_baseline * 100 if aov_baseline else 0
+                arrow = "▲" if diff_pct >= 0 else "▼"
+                color = "#047857" if diff_pct >= 0 else "#DC2626"
+                verb = "높아요" if diff_pct >= 0 else "낮아요"
+                st.markdown(
+                    f"<div style='font-size:1.05rem;font-weight:700;margin:6px 0;color:{color}'>{arrow} {abs(diff_pct):.1f}%</div>"
+                    "<div style='font-size:0.75rem;color:var(--athlepa-muted-text)'>"
+                    f"선택 기간 평균 주문금액(AOV)이 전체 기간 평균보다 {verb}. (경쟁사 데이터가 없어 자체 기준선과 비교)</div>",
+                    unsafe_allow_html=True,
+                )
+
+    with col3:
+        with st.container(border=True):
+            st.markdown("<div class='stat-label'>고객 이탈 원인</div>", unsafe_allow_html=True)
+            if orders_full.empty:
+                st.caption("데이터가 부족합니다.")
+            else:
+                last_order = orders_full.groupby("user_id")["order_date"].max()
+                dormant_ratio = (last_order < (orders_full["order_date"].max() - pd.Timedelta(days=60))).mean() * 100
+                if not events_period.empty:
+                    cart_users = events_period.loc[events_period["event_type"] == "add_to_cart", "user_id"].nunique()
+                    purchase_users = events_period.loc[events_period["event_type"] == "purchase", "user_id"].nunique()
+                    abandon_rate = (1 - purchase_users / cart_users) * 100 if cart_users else 0
+                    detail = f"장바구니 이탈률 {abandon_rate:.0f}% · 휴면 고객 비중 {dormant_ratio:.0f}%"
+                else:
+                    detail = f"휴면 고객 비중 {dormant_ratio:.0f}% (행동 로그가 없어 장바구니 이탈률은 계산 불가)"
+                st.markdown(
+                    f"<div style='font-size:1.05rem;font-weight:700;margin:6px 0'>휴면 {dormant_ratio:.0f}%</div>"
+                    f"<div style='font-size:0.75rem;color:var(--athlepa-muted-text)'>{detail}</div>",
+                    unsafe_allow_html=True,
+                )
+
+
 def render_segment_ranking(orders):
     """세그먼트별 매출 기여도 랭킹 (VIP / 충성 / 이탈위험 / 휴면)"""
     rfm = assign_segment(calculate_rfm(orders.copy()))
@@ -443,7 +548,17 @@ def render_rfm_scatter(orders):
         color_continuous_scale=[PALE_PURPLE, ACCENT],
         labels={"Frequency": "구매 빈도", "Monetary": "구매 금액", "Recency": "최근성(일)"},
     )
-    fig.update_traces(marker=dict(opacity=0.75, line=dict(width=0)))
+    symbol = currency_config()["symbol"]
+    fig.update_traces(
+        marker=dict(opacity=0.75, line=dict(width=0)),
+        hovertemplate=(
+            "<b>고객 %{customdata[0]}</b> · %{customdata[1]}<br>"
+            "최근 구매: %{marker.color}일 전<br>"
+            "구매 빈도: %{x}회<br>"
+            f"구매 금액: {symbol}" + "%{y:,.0f}"
+            "<extra></extra>"
+        ),
+    )
     fig.update_layout(
         height=320,
         margin=dict(t=30),
@@ -455,19 +570,27 @@ def render_rfm_scatter(orders):
 
 
 def _render_funnel_bars(labels, values, color):
-    """단계별 진행률을 라운드형 진행 바 목록으로 표시 (첫 단계 대비 도달 비율만큼 채움)"""
-    base = values[0] if values[0] else 1
-    rows_html = ""
-    for label, v in zip(labels, values):
-        pct = v / base * 100
-        rows_html += (
-            "<div class='funnel-row'>"
-            f"<div class='funnel-header'><span class='funnel-label'>{label}</span>"
-            f"<span class='funnel-value'>{v:,}명 ({pct:.1f}%)</span></div>"
-            f"<div class='funnel-track'><div class='funnel-fill' style='width:{pct:.2f}%;background:{color}'></div></div>"
-            "</div>"
+    """단계별 도달 인원을 깔때기(funnel) 도형으로 표시 (Amazon PM 피드백 반영 —
+    이전엔 진행 바 목록이었는데, 각 단계가 첫 단계 대비 얼마나 좁아지는지 한눈에
+    보이도록 실제 깔때기 모양으로 교체)"""
+    fig = go.Figure(
+        go.Funnel(
+            y=labels,
+            x=values,
+            textposition="inside",
+            textinfo="value+percent initial",
+            marker=dict(color=color),
+            connector=dict(line=dict(color=PALE_PURPLE, width=1)),
         )
-    st.markdown(rows_html, unsafe_allow_html=True)
+    )
+    fig.update_layout(
+        height=70 * len(labels) + 40,
+        margin=dict(l=10, r=10, t=10, b=10),
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(size=12, color="#111018"),
+    )
+    st.plotly_chart(fig, width='stretch')
 
 
 def render_funnel(events):
@@ -787,6 +910,8 @@ def render_charts():
 
         render_kpi_cards(orders_f, events_f, prev_orders, prev_events)
         render_customer_profile(users, events_f)
+        render_activity_kpis(events_f)
+        render_insight_cards(orders_f, events_f, orders, rfm)
 
     with tab_revenue:
         merged_orders = orders_f.merge(users[["user_id", "acquisition_channel"]], on="user_id").merge(
