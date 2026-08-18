@@ -124,12 +124,15 @@ def load_data(dataset_source: str = "athlepa"):
 
     # 빈 DataFrame이어도 pd.to_datetime은 정상 동작하므로 굳이 empty 체크로 건너뛰지 않는다.
     # 건너뛰면 컬럼이 object dtype인 채로 남아서, 나중에 .dt 접근자를 쓰는 코드가 깨진다.
+    # format="ISO8601": 합성 데이터(초 단위)와 실시간 트래킹 이벤트(마이크로초 단위)가
+    # 정밀도가 달라서, format을 지정하지 않으면 pandas가 앞부분 값으로 추론한 형식이
+    # 뒤에 나오는 다른 정밀도의 값에서 깨진다 ("unconverted data remains" 에러).
     if "signup_date" in users.columns:
-        users["signup_date"] = pd.to_datetime(users["signup_date"])
+        users["signup_date"] = pd.to_datetime(users["signup_date"], format="ISO8601")
     if "order_date" in orders.columns:
-        orders["order_date"] = pd.to_datetime(orders["order_date"])
+        orders["order_date"] = pd.to_datetime(orders["order_date"], format="ISO8601")
     if "timestamp" in events.columns:
-        events["timestamp"] = pd.to_datetime(events["timestamp"])
+        events["timestamp"] = pd.to_datetime(events["timestamp"], format="ISO8601")
 
     return users, orders, events
 
@@ -141,9 +144,9 @@ def load_users_orders(dataset_source: str = "athlepa"):
     users = _fetch_all("users", dataset_source)
     orders = _fetch_all("orders", dataset_source)
     if "signup_date" in users.columns:
-        users["signup_date"] = pd.to_datetime(users["signup_date"])
+        users["signup_date"] = pd.to_datetime(users["signup_date"], format="ISO8601")
     if "order_date" in orders.columns:
-        orders["order_date"] = pd.to_datetime(orders["order_date"])
+        orders["order_date"] = pd.to_datetime(orders["order_date"], format="ISO8601")
     return users, orders
 
 
@@ -156,5 +159,5 @@ def load_recent_active_users(dataset_source: str, since: str, until: str) -> pd.
         date_column="timestamp", date_from=since, date_to=until,
     )
     if "timestamp" in df.columns:
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        df["timestamp"] = pd.to_datetime(df["timestamp"], format="ISO8601")
     return df
