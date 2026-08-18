@@ -92,5 +92,6 @@ def track(event: TrackEvent):
     try:
         get_client().table("events").insert(row).execute()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"[track] insert 실패: {e}")
+        raise HTTPException(status_code=500, detail="이벤트 저장에 실패했습니다")
     return {"ok": True}
