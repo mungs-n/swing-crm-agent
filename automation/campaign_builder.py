@@ -12,7 +12,7 @@ import os
 import random
 
 from utils.rfm import calculate_rfm, assign_segment
-from components.email_sender import send_email, save_history, save_scheduled_emails, load_test_recipients, KST
+from automation.email_sender import send_email, save_history, save_scheduled_emails, load_test_recipients, KST
 
 load_dotenv()
 

@@ -4,7 +4,7 @@ import plotly.graph_objects as go
 from dotenv import load_dotenv
 from datetime import timedelta
 
-from components.charts import load_data
+from dashboard.charts import load_data
 
 PURPLE = "#7C3AED"
 
@@ -154,7 +154,7 @@ def render_home():
                     st.markdown("<p style='font-size:0.8rem;font-weight:600;margin:0'>월별 GMV 추이</p>", unsafe_allow_html=True)
                 with hcol2:
                     if st.button("상세 보기", icon=":material/arrow_forward:", icon_position="right", type="tertiary", key="link_dashboard"):
-                        st.switch_page("pages/1_Dashboard.py")
+                        st.switch_page("dashboard/page.py")
 
                 monthly = orders.set_index("order_date").resample("MS")["total_amount"].sum() / 1_000_000
                 fig = go.Figure()
@@ -183,7 +183,7 @@ def render_home():
                     st.markdown("<p style='font-size:0.8rem;font-weight:600;margin:0'>최근 캠페인</p>", unsafe_allow_html=True)
                 with hcol2:
                     if st.button("전체 보기", icon=":material/arrow_forward:", icon_position="right", type="tertiary", key="link_campaign"):
-                        st.switch_page("pages/2_Campaign.py")
+                        st.switch_page("automation/page.py")
 
                 if history_df.empty:
                     st.caption("아직 발송 이력이 없습니다.")
@@ -264,9 +264,9 @@ def render_home():
 pg = st.navigation(
     [
         st.Page(render_home, title="홈", icon=":material/home:", default=True),
-        st.Page("pages/1_Dashboard.py", title="대시보드", icon=":material/dashboard:"),
-        st.Page("pages/2_AI_Insights.py", title="고객 분석", icon=":material/group:"),
-        st.Page("pages/2_Campaign.py", title="자동화", icon=":material/bolt:"),
+        st.Page("dashboard/page.py", title="대시보드", icon=":material/dashboard:", url_path="dashboard"),
+        st.Page("ai_insights/page.py", title="고객 분석", icon=":material/group:", url_path="ai-insights"),
+        st.Page("automation/page.py", title="자동화", icon=":material/bolt:", url_path="automation"),
     ]
 )
 pg.run()
