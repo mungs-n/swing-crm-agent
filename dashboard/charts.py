@@ -9,6 +9,7 @@ import plotly.graph_objects as go
 import pandas as pd
 
 from utils.rfm import calculate_rfm, assign_segment
+from utils.data_loader import DATASET_OPTIONS, load_data, fmt_amount, currency_config
 
 ACCENT = "#7C3AED"
 PALE_PURPLE = "#C4B5FD"
@@ -82,14 +83,6 @@ PERSONA_KR = {
 
 AGE_LABELS = ["10대", "20대", "30대", "40대", "50대", "60대 이상"]
 
-@st.cache_data
-def load_data():
-    """데이터 로드 함수"""
-    users = pd.read_csv("data/users.csv", parse_dates=["signup_date"])
-    orders = pd.read_csv("data/orders.csv", parse_dates=["order_date"])
-    events = pd.read_csv("data/events.csv", parse_dates=["timestamp"])
-    return users, orders, events
-
 
 def _pct_delta(current, previous):
     """전기 대비 증감률(%). 전기 값이 0이면 0 반환"""
@@ -160,10 +153,10 @@ def render_kpi_cards(orders, events, prev_orders, prev_events):
     row = st.columns(4)
     with row[0]:
         v, d = kpi["gmv"]
-        _kpi_card("GMV", f"₩{v / 1_000_000:.1f}M", d, key="card-kpi-gmv")
+        _kpi_card("GMV", fmt_amount(v), d, key="card-kpi-gmv")
     with row[1]:
         v, d = kpi["aov"]
-        _kpi_card("AOV", f"₩{v:,.0f}", d, key="card-kpi-aov")
+        _kpi_card("AOV", fmt_amount(v, scaled=False), d, key="card-kpi-aov")
     with row[2]:
         v, d = kpi["active_users"]
         _kpi_card("활성 고객 수", f"{v:,}명", d, key="card-kpi-active")
@@ -184,6 +177,7 @@ def render_gmv_chart(orders, granularity="월별"):
 
     freq = {"일별": "D", "주별": "W", "월별": "ME"}[granularity]
     label_fmt = {"일별": "%m/%d", "주별": "%m/%d", "월별": "%Y-%m"}[granularity]
+    currency_symbol = currency_config()["symbol"]
 
     grouped = (
         orders.set_index("order_date")
@@ -196,13 +190,13 @@ def render_gmv_chart(orders, granularity="월별"):
 
     st.subheader(
         "GMV & 주문 수 추이",
-        help="막대는 구간별 GMV(총매출), 선은 주문 건수예요. 진한 파란 막대는 가장 최근 구간이고 나머지는 이전 구간이에요.",
+        help="막대는 구간별 GMV(총매출), 선은 주문 건수예요. 진한 보라 막대는 가장 최근 구간이고 나머지는 이전 구간이에요.",
     )
 
     fig = go.Figure()
     fig.add_bar(
         x=grouped["label"], y=grouped["gmv"], name="GMV", marker_color=bar_colors,
-        hovertemplate="%{x}<br>GMV ₩%{y:,.0f}<extra></extra>",
+        hovertemplate="%{x}<br>GMV " + currency_symbol + "%{y:,.0f}<extra></extra>",
     )
     fig.add_trace(
         go.Scatter(
@@ -218,7 +212,7 @@ def render_gmv_chart(orders, granularity="월별"):
     )
     fig.update_layout(
         height=260,
-        yaxis=dict(title="GMV (원)", gridcolor="#F0EDFB"),
+        yaxis=dict(title=f"GMV ({currency_symbol})", gridcolor="#F0EDFB"),
         yaxis2=dict(title="주문 수", overlaying="y", side="right"),
         xaxis=dict(showgrid=False),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
@@ -264,7 +258,7 @@ def _render_ranked_bars(title, series, colors=None, value_fmt=None, icon=None):
     data = data.iloc[::-1]
     bar_colors = bar_colors[::-1]
 
-    fmt = value_fmt or (lambda v: f"₩{v / 1_000_000:.1f}M")
+    fmt = value_fmt or fmt_amount
     text = [fmt(v) for v in data.values]
 
     fig = go.Figure(
@@ -403,7 +397,7 @@ def render_category_ranking(orders):
         return
 
     bar_colors = [ACCENT] + [PALE_PURPLE] * (len(data) - 1)
-    text = [f"₩{v / 1_000_000:.1f}M" for v in data.values]
+    text = [fmt_amount(v) for v in data.values]
 
     fig = go.Figure(
         go.Bar(
@@ -668,9 +662,19 @@ DATE_PRESETS = {
 
 
 def render_date_filter(orders, events):
-    """대시보드 전역 기간/단위 필터. 사이드바에 배치해서 본문을 넓게 씀 (KPI·매출·퍼널·추이 차트에 공통 적용)"""
-    min_date = events["timestamp"].min().date()
-    max_date = events["timestamp"].max().date()
+    """대시보드 전역 기간/단위 필터. 사이드바에 배치해서 본문을 넓게 씀 (KPI·매출·퍼널·추이 차트에 공통 적용)
+
+    events가 비어있는 데이터셋(예: 행동 로그가 없는 데이콘 데이터)은 orders의 주문일 범위로
+    대체한다. 둘 다 비어있으면 필터를 그릴 기준 자체가 없다는 뜻이라 None을 반환한다."""
+    if not events.empty:
+        min_date = events["timestamp"].min().date()
+        max_date = events["timestamp"].max().date()
+    elif not orders.empty:
+        min_date = orders["order_date"].min().date()
+        max_date = orders["order_date"].max().date()
+    else:
+        st.sidebar.warning("표시할 데이터가 없습니다.")
+        return None, None, None, None, "일별", None, None, None
 
     with st.sidebar:
         st.markdown(
@@ -685,7 +689,8 @@ def render_date_filter(orders, events):
         choice = st.radio("빠른 선택", options, key="date_preset", **radio_kwargs)
 
         if choice == "직접 선택":
-            available_dates = sorted(events["timestamp"].dt.date.unique())
+            date_source = events["timestamp"] if not events.empty else orders["order_date"]
+            available_dates = sorted(date_source.dt.date.unique())
             start_kwargs = {} if "custom_start_date" in st.session_state else {"index": 0}
             end_kwargs = {} if "custom_end_date" in st.session_state else {"index": len(available_dates) - 1}
             start = st.selectbox("시작일", available_dates, key="custom_start_date", **start_kwargs)
@@ -716,12 +721,31 @@ def render_date_filter(orders, events):
     return f_orders, f_events, prev_orders, prev_events, granularity, choice, start, end
 
 
+def render_dataset_selector():
+    """어떤 데이터셋(ATHLEPA 자체 데이터 / 데이콘 공개 데이터)을 볼지 고르는 사이드바 선택창.
+    session_state에 저장해서 대시보드뿐 아니라 다른 페이지에서도 같은 값을 참조할 수 있게 한다."""
+    with st.sidebar:
+        st.markdown(
+            "<div style='font-size:13px;font-weight:600;margin-bottom:0.5rem;color:#868E96'>데이터셋</div>",
+            unsafe_allow_html=True,
+        )
+        st.selectbox(
+            "데이터셋 선택",
+            options=list(DATASET_OPTIONS.keys()),
+            format_func=lambda k: DATASET_OPTIONS[k],
+            key="dataset_source",
+            label_visibility="collapsed",
+        )
+
+
 def render_charts():
     """메인 렌더 함수 - Dashboard.py에서 호출"""
-    try:
-        users, orders, events = load_data()
-    except FileNotFoundError:
-        st.warning("데이터 파일을 찾을 수 없습니다. data/ 폴더에 CSV 파일을 넣어주세요.")
+    render_dataset_selector()
+    dataset_source = st.session_state.get("dataset_source", "athlepa")
+    users, orders, events = load_data(dataset_source)
+
+    if users.empty and orders.empty:
+        st.warning("표시할 데이터가 없습니다.")
         return
 
     st.markdown(DASHBOARD_CSS, unsafe_allow_html=True)
@@ -731,9 +755,11 @@ def render_charts():
     )
     if orders_f is None:
         return
-    if orders_f.empty or events_f.empty:
+    if orders_f.empty:
         st.warning("선택한 기간에 데이터가 없습니다.")
         return
+    if events_f.empty:
+        st.caption(":material/info: 이 데이터셋은 방문·행동 로그가 없어 일부 차트(행동 분석)는 비어 보일 수 있어요.")
 
     rfm = assign_segment(calculate_rfm(orders_f.copy()))
 

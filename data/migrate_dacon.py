@@ -78,6 +78,9 @@ def migrate_users(sb):
     ).dt.strftime("%Y-%m-%d")
 
     df = cust.rename(columns={"고객ID": "user_id", "성별": "gender", "고객지역": "region"})
+    # ATHLEPA 쪽 users는 gender를 M/F 코드로 저장하는데, 데이콘 원본은 한글(남/여)이라
+    # 대시보드의 성별 분포 차트(코드가 "M"/"F" 기준으로 집계)와 어긋나지 않도록 맞춰준다.
+    df["gender"] = df["gender"].map({"남": "M", "여": "F"}).fillna(df["gender"])
     for col in ["name", "persona_type", "age", "acquisition_channel"]:
         df[col] = None
     cols = ["dataset_source", "user_id", "name", "persona_type", "age", "gender", "region", "acquisition_channel", "signup_date"]
