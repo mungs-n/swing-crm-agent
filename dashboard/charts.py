@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 import pandas as pd
 
 from utils.rfm import calculate_rfm, assign_segment
-from utils.data_loader import DATASET_OPTIONS, load_data, fmt_amount, currency_config
+from utils.data_loader import load_data, fmt_amount, currency_config, get_dataset_source
 
 ACCENT = "#7C3AED"
 PALE_PURPLE = "#C4B5FD"
@@ -721,27 +721,10 @@ def render_date_filter(orders, events):
     return f_orders, f_events, prev_orders, prev_events, granularity, choice, start, end
 
 
-def render_dataset_selector():
-    """어떤 데이터셋(ATHLEPA 자체 데이터 / 데이콘 공개 데이터)을 볼지 고르는 사이드바 선택창.
-    session_state에 저장해서 대시보드뿐 아니라 다른 페이지에서도 같은 값을 참조할 수 있게 한다."""
-    with st.sidebar:
-        st.markdown(
-            "<div style='font-size:13px;font-weight:600;margin-bottom:0.5rem;color:#868E96'>데이터셋</div>",
-            unsafe_allow_html=True,
-        )
-        st.selectbox(
-            "데이터셋 선택",
-            options=list(DATASET_OPTIONS.keys()),
-            format_func=lambda k: DATASET_OPTIONS[k],
-            key="dataset_source",
-            label_visibility="collapsed",
-        )
-
-
 def render_charts():
-    """메인 렌더 함수 - Dashboard.py에서 호출"""
-    render_dataset_selector()
-    dataset_source = st.session_state.get("dataset_source", "athlepa")
+    """메인 렌더 함수 - Dashboard.py에서 호출. 어느 데이터셋을 보여줄지는 로그인한
+    회사 계정 기준으로 이미 session_state["dataset_source"]에 정해져 있다(utils/auth.py)."""
+    dataset_source = get_dataset_source()
     users, orders, events = load_data(dataset_source)
 
     if users.empty and orders.empty:

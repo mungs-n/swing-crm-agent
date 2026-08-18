@@ -5,6 +5,8 @@ from dotenv import load_dotenv
 from datetime import timedelta
 
 from dashboard.charts import load_data
+from utils.auth import is_logged_in, render_login_form, render_logout_button
+from utils.data_loader import get_dataset_source, fmt_amount, currency_config
 
 PURPLE = "#7C3AED"
 
@@ -55,9 +57,10 @@ def _stat_card(label, value, trend_html="", sub="", alert=False, sub_inline=Fals
 
 
 def render_home():
+    company_name = st.session_state.get("auth_company_name", "ATHLEPA")
     col_head, col_badge = st.columns([5, 2])
     with col_head:
-        st.markdown("<h1>안녕하세요, ATHLEPA 팀</h1>", unsafe_allow_html=True)
+        st.markdown(f"<h1>안녕하세요, {company_name} 팀</h1>", unsafe_allow_html=True)
     with col_badge:
         st.markdown(
             "<div style='text-align:right;margin-top:10px'>"
@@ -68,7 +71,7 @@ def render_home():
         )
 
     try:
-        users, orders, events = load_data()
+        users, orders, events = load_data(get_dataset_source())
         orders = orders.copy()
         orders["order_date"] = pd.to_datetime(orders["order_date"])
 
@@ -94,9 +97,15 @@ def render_home():
         last_order = orders.groupby("user_id")["order_date"].max()
         dormant_count = int((last_order < latest_date - timedelta(days=60)).sum())
 
-        try:
-            history_df = pd.read_csv("data/campaign_history.csv")
-        except FileNotFoundError:
+        # 캠페인 발송 이력은 지금 ATHLEPA 계정 전용 기능(데이콘 등 다른 회사는 아직 캠페인을
+        # 운영하지 않음)이라, 다른 회사로 로그인했을 때 ATHLEPA의 캠페인 데이터가 그대로
+        # 보이면 안 된다. dataset_source가 athlepa일 때만 실제로 읽어온다.
+        if get_dataset_source() == "athlepa":
+            try:
+                history_df = pd.read_csv("data/campaign_history.csv")
+            except FileNotFoundError:
+                history_df = pd.DataFrame()
+        else:
             history_df = pd.DataFrame()
 
         this_month = pd.Timestamp.now().strftime("%Y-%m")
@@ -104,9 +113,12 @@ def render_home():
         scheduled_this_month = campaigns_this_month["상태"].astype(str).str.contains("예약").sum() if not campaigns_this_month.empty else 0
         completed_this_month = len(campaigns_this_month) - scheduled_this_month
 
-        try:
-            scheduled_df = pd.read_csv("data/scheduled_emails.csv", encoding="utf-8-sig")
-        except FileNotFoundError:
+        if get_dataset_source() == "athlepa":
+            try:
+                scheduled_df = pd.read_csv("data/scheduled_emails.csv", encoding="utf-8-sig")
+            except FileNotFoundError:
+                scheduled_df = pd.DataFrame()
+        else:
             scheduled_df = pd.DataFrame()
         next_scheduled = None
         if not scheduled_df.empty:
@@ -127,7 +139,7 @@ def render_home():
             )
         with kcol2:
             _stat_card(
-                "누적 GMV", f"₩{gmv_total / 1_000_000:.1f}M",
+                "누적 GMV", fmt_amount(gmv_total),
                 _trend_pill("up" if gmv_trend >= 0 else "down", f"{gmv_trend:+.1f}%"),
             )
         with kcol3:
@@ -156,7 +168,8 @@ def render_home():
                     if st.button("상세 보기", icon=":material/arrow_forward:", icon_position="right", type="tertiary", key="link_dashboard"):
                         st.switch_page("dashboard/page.py")
 
-                monthly = orders.set_index("order_date").resample("MS")["total_amount"].sum() / 1_000_000
+                cur = currency_config()
+                monthly = orders.set_index("order_date").resample("MS")["total_amount"].sum() / cur["scale"]
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(
                     x=[f"{d.month}월" for d in monthly.index],
@@ -164,7 +177,7 @@ def render_home():
                     mode="lines+markers",
                     line=dict(color=PURPLE, width=2),
                     marker=dict(size=5, color=PURPLE),
-                    hovertemplate="%{x}<br>GMV ₩%{y:.1f}M<extra></extra>",
+                    hovertemplate=f"%{{x}}<br>GMV {cur['symbol']}%{{y:.1f}}{cur['scale_label']}<extra></extra>",
                 ))
                 fig.update_layout(
                     height=150,
@@ -261,12 +274,16 @@ def render_home():
         st.warning("데이터 파일을 찾을 수 없습니다. data/ 폴더를 확인해주세요.")
 
 
-pg = st.navigation(
-    [
-        st.Page(render_home, title="홈", icon=":material/home:", default=True),
-        st.Page("dashboard/page.py", title="대시보드", icon=":material/dashboard:", url_path="dashboard"),
-        st.Page("ai_insights/page.py", title="고객 분석", icon=":material/group:", url_path="ai-insights"),
-        st.Page("automation/page.py", title="자동화", icon=":material/bolt:", url_path="automation"),
-    ]
-)
-pg.run()
+if not is_logged_in():
+    render_login_form()
+else:
+    render_logout_button()
+    pg = st.navigation(
+        [
+            st.Page(render_home, title="홈", icon=":material/home:", default=True),
+            st.Page("dashboard/page.py", title="대시보드", icon=":material/dashboard:", url_path="dashboard"),
+            st.Page("ai_insights/page.py", title="고객 분석", icon=":material/group:", url_path="ai-insights"),
+            st.Page("automation/page.py", title="자동화", icon=":material/bolt:", url_path="automation"),
+        ]
+    )
+    pg.run()
