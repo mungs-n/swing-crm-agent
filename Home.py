@@ -4,7 +4,7 @@ import plotly.graph_objects as go
 from dotenv import load_dotenv
 from datetime import timedelta
 
-from utils.auth import is_logged_in, render_login_form, render_logout_button
+from utils.auth import is_logged_in, render_login_form, render_signup_form, render_logout_button, render_onboarding_screen
 from utils.data_loader import get_dataset_source, fmt_amount, currency_config, load_users_orders, load_recent_active_users
 
 PURPLE = "#7C3AED"
@@ -283,7 +283,12 @@ def render_home():
 
 
 if not is_logged_in():
-    render_login_form()
+    if st.session_state.get("_auth_view") == "signup":
+        render_signup_form()
+    else:
+        render_login_form()
+elif st.session_state.get("_onboarding_keys"):
+    render_onboarding_screen()
 else:
     render_logout_button()
     pg = st.navigation(
