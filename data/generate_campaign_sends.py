@@ -147,6 +147,7 @@ def main():
     personas = list(EMAIL_OPEN_RATE.keys())
 
     rows = []
+    history_rows = []
     for i in range(N_CAMPAIGNS):
         campaign_id = str(uuid.uuid4())[:8]
         persona = random.choice(personas)
@@ -155,13 +156,40 @@ def main():
         # 필요한 향후 베이스라인 비교 분석에서 계산 불가 케이스가 과도하게 많아지지 않도록 함
         span_days = (END_DATE - (START_DATE + timedelta(days=15))).days
         sent_date = START_DATE + timedelta(days=15 + random.randint(0, span_days))
+        before = len(rows)
         simulate_campaign(users, orders, campaign_id, persona, channel, sent_date, rows)
+        sent_count = len(rows) - before
+        if sent_count == 0:
+            continue
+        # campaign_sends.csv가 참조하는 campaign_id가 campaign_history.csv에도 있어야
+        # 외래키가 성립하므로, 합성 캠페인마다 요약 행도 같이 만든다 (기존 실사용 11개 행은
+        # 건드리지 않고 새 행만 추가).
+        history_rows.append(
+            {
+                "campaign_id": campaign_id,
+                "발송일시": sent_date.strftime("%Y-%m-%d %H:%M"),
+                "세그먼트": PERSONA_KR[persona],
+                "대상 인원": sent_count,
+                "메시지 요약": f"[합성 데이터] {PERSONA_KR[persona]} 대상 {channel} 캠페인",
+                "상태": "전체 발송 완료 (합성 데이터)",
+                "approval_mode": "자동실행",
+            }
+        )
 
     df = pd.DataFrame(rows)
     df.to_csv("data/campaign_sends.csv", index=False, encoding="utf-8-sig")
-    print(f"campaign_sends.csv done ({len(df)} rows, {N_CAMPAIGNS} campaigns)")
+    print(f"campaign_sends.csv done ({len(df)} rows, {len(history_rows)} campaigns)")
     print(df["channel"].value_counts())
     print("전환 건수:", (df["converted_order_id"] != "").sum())
+
+    history_new = pd.DataFrame(history_rows)
+    try:
+        history_existing = pd.read_csv("data/campaign_history.csv", encoding="utf-8-sig")
+        history_combined = pd.concat([history_existing, history_new], ignore_index=True)
+    except FileNotFoundError:
+        history_combined = history_new
+    history_combined.to_csv("data/campaign_history.csv", index=False, encoding="utf-8-sig")
+    print(f"campaign_history.csv에 합성 캠페인 {len(history_new)}건 추가 (기존 행은 유지)")
 
 
 if __name__ == "__main__":
