@@ -1,6 +1,6 @@
 import streamlit as st
 
-from components.ai_insights import render_ai_panel, render_status_badge
+from ai_insights.chatbot import render_ai_panel, render_status_badge
 
 col_title, col_status = st.columns([3, 1])
 with col_title:

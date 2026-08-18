@@ -8,6 +8,7 @@ import sendgrid
 from sendgrid.helpers.mail import Mail
 import pandas as pd
 import os
+import uuid
 from datetime import datetime
 
 try:
@@ -49,13 +50,15 @@ def send_email(to_email, subject, body, send_at: int | None = None):
     return response.status_code
 
 
-def save_history(segment, copy, count, status):
+def save_history(segment, copy, count, status, approval_mode="자동실행"):
     new_row = {
+        "campaign_id": str(uuid.uuid4())[:8],
         "발송일시": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "세그먼트": segment,
         "대상 인원": count,
         "메시지 요약": copy[:50] + "...",
-        "상태": status
+        "상태": status,
+        "approval_mode": approval_mode,
     }
     try:
         df = pd.read_csv(HISTORY_FILE)
