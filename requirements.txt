@@ -5,3 +5,4 @@ numpy
 anthropic
 sendgrid
 python-dotenv
+supabase
