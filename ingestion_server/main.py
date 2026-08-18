@@ -89,5 +89,8 @@ def track(event: TrackEvent):
         # "invalid input syntax for type integer" 에러가 난다.
         "price": int(event.price) if event.price is not None else None,
     }
-    get_client().table("events").insert(row).execute()
+    try:
+        get_client().table("events").insert(row).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
     return {"ok": True}
