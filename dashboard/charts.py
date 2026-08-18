@@ -53,6 +53,14 @@ div[data-testid="stHeadingWithActionElements"] h3 {
 section[data-testid="stSidebar"] div[role="radiogroup"] p {
     font-size: 13px !important;
 }
+/* KPI 카드 4개를 스크롤해도 항상 상단에 보이게 고정 */
+div[class*="st-key-kpi-sticky-row"] {
+    position: sticky;
+    top: 0;
+    z-index: 999;
+    background: #FFFFFF;
+    padding: 8px 0 4px 0;
+}
 </style>
 """
 
@@ -103,10 +111,7 @@ def _fmt_duration(minutes):
 
 
 def compute_kpis(cur_orders, cur_events, prev_orders, prev_events):
-    """KPI 4종 + 선택 기간을 직전 동일 길이 기간과 비교한 증감률"""
-    active_this = cur_events["user_id"].nunique()
-    active_last = prev_events["user_id"].nunique()
-
+    """KPI 3종 + 선택 기간을 직전 동일 길이 기간과 비교한 증감률"""
     gmv_this = cur_orders["total_amount"].sum()
     gmv_last = prev_orders["total_amount"].sum()
 
@@ -121,7 +126,6 @@ def compute_kpis(cur_orders, cur_events, prev_orders, prev_events):
     conv_last = (buy_sessions_last / sessions_last * 100) if sessions_last else 0
 
     return {
-        "active_users": (active_this, _pct_delta(active_this, active_last)),
         "gmv": (gmv_this, _pct_delta(gmv_this, gmv_last)),
         "aov": (aov_this, _pct_delta(aov_this, aov_last)),
         "conversion": (conv_this, conv_this - conv_last),
@@ -147,10 +151,10 @@ def _kpi_card(label, value_text, delta, unit="%", key=None):
 
 
 def render_kpi_cards(orders, events, prev_orders, prev_events):
-    """KPI 카드 4개 (GMV / AOV / 활성 고객 수 / 구매 전환율)"""
+    """KPI 카드 3개 (GMV / AOV / 구매 전환율)"""
     kpi = compute_kpis(orders, events, prev_orders, prev_events)
 
-    row = st.columns(4)
+    row = st.columns(3)
     with row[0]:
         v, d = kpi["gmv"]
         _kpi_card("GMV", fmt_amount(v), d, key="card-kpi-gmv")
@@ -158,9 +162,6 @@ def render_kpi_cards(orders, events, prev_orders, prev_events):
         v, d = kpi["aov"]
         _kpi_card("AOV", fmt_amount(v, scaled=False), d, key="card-kpi-aov")
     with row[2]:
-        v, d = kpi["active_users"]
-        _kpi_card("활성 고객 수", f"{v:,}명", d, key="card-kpi-active")
-    with row[3]:
         v, d = kpi["conversion"]
         _kpi_card("구매 전환율", f"{v:.1f}%", d, unit="%p", key="card-kpi-conv")
 
@@ -378,6 +379,36 @@ def render_customer_profile(users, events):
         render_persona_ranking(users_f)
 
 
+def render_activity_kpis(events):
+    """DAU/WAU/MAU — events 기준 일/주/월 활성 사용자 수. 각각 바로 직전 같은 길이
+    기간과 비교한 증감률도 같이 보여준다."""
+    if events.empty:
+        return
+    max_date = events["timestamp"].max()
+
+    def _active(days_back, offset=0):
+        end = (max_date - pd.Timedelta(days=offset)).date()
+        start = end - pd.Timedelta(days=days_back - 1)
+        window = events[(events["timestamp"].dt.date >= start) & (events["timestamp"].dt.date <= end)]
+        return window["user_id"].nunique()
+
+    dau, dau_prev = _active(1), _active(1, offset=1)
+    wau, wau_prev = _active(7), _active(7, offset=7)
+    mau, mau_prev = _active(30), _active(30, offset=30)
+
+    st.markdown(
+        "<div style='font-size:0.85rem;font-weight:600;margin:0 0 4px'>활성 사용자 지표</div>",
+        unsafe_allow_html=True,
+    )
+    row = st.columns(3)
+    with row[0]:
+        _kpi_card("DAU (일간)", f"{dau:,}명", _pct_delta(dau, dau_prev), key="card-dau")
+    with row[1]:
+        _kpi_card("WAU (주간)", f"{wau:,}명", _pct_delta(wau, wau_prev), key="card-wau")
+    with row[2]:
+        _kpi_card("MAU (월간)", f"{mau:,}명", _pct_delta(mau, mau_prev), key="card-mau")
+
+
 def render_segment_ranking(orders):
     """세그먼트별 매출 기여도 랭킹 (VIP / 충성 / 이탈위험 / 휴면)"""
     rfm = assign_segment(calculate_rfm(orders.copy()))
@@ -443,7 +474,17 @@ def render_rfm_scatter(orders):
         color_continuous_scale=[PALE_PURPLE, ACCENT],
         labels={"Frequency": "구매 빈도", "Monetary": "구매 금액", "Recency": "최근성(일)"},
     )
-    fig.update_traces(marker=dict(opacity=0.75, line=dict(width=0)))
+    symbol = currency_config()["symbol"]
+    fig.update_traces(
+        marker=dict(opacity=0.75, line=dict(width=0)),
+        hovertemplate=(
+            "<b>고객 %{customdata[0]}</b> · %{customdata[1]}<br>"
+            "최근 구매: %{marker.color}일 전<br>"
+            "구매 빈도: %{x}회<br>"
+            f"구매 금액: {symbol}" + "%{y:,.0f}"
+            "<extra></extra>"
+        ),
+    )
     fig.update_layout(
         height=320,
         margin=dict(t=30),
@@ -455,19 +496,27 @@ def render_rfm_scatter(orders):
 
 
 def _render_funnel_bars(labels, values, color):
-    """단계별 진행률을 라운드형 진행 바 목록으로 표시 (첫 단계 대비 도달 비율만큼 채움)"""
-    base = values[0] if values[0] else 1
-    rows_html = ""
-    for label, v in zip(labels, values):
-        pct = v / base * 100
-        rows_html += (
-            "<div class='funnel-row'>"
-            f"<div class='funnel-header'><span class='funnel-label'>{label}</span>"
-            f"<span class='funnel-value'>{v:,}명 ({pct:.1f}%)</span></div>"
-            f"<div class='funnel-track'><div class='funnel-fill' style='width:{pct:.2f}%;background:{color}'></div></div>"
-            "</div>"
+    """단계별 도달 인원을 깔때기(funnel) 도형으로 표시 (Amazon PM 피드백 반영 —
+    이전엔 진행 바 목록이었는데, 각 단계가 첫 단계 대비 얼마나 좁아지는지 한눈에
+    보이도록 실제 깔때기 모양으로 교체)"""
+    fig = go.Figure(
+        go.Funnel(
+            y=labels,
+            x=values,
+            textposition="inside",
+            textinfo="value+percent initial",
+            marker=dict(color=color),
+            connector=dict(line=dict(color=PALE_PURPLE, width=1)),
         )
-    st.markdown(rows_html, unsafe_allow_html=True)
+    )
+    fig.update_layout(
+        height=70 * len(labels) + 40,
+        margin=dict(l=10, r=10, t=10, b=10),
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(size=12, color="#111018"),
+    )
+    st.plotly_chart(fig, width='stretch')
 
 
 def render_funnel(events):
@@ -746,6 +795,13 @@ def render_charts():
 
     rfm = assign_segment(calculate_rfm(orders_f.copy()))
 
+    # KPI 카드는 탭 선택창 위(공용 영역)에 두고 sticky 처리해서, 탭을 넘나들거나
+    # 스크롤해도 항상 보이게 한다. 활성 사용자 지표(DAU/WAU/MAU)가 맨 위, 그 아래
+    # GMV/AOV/전환율 카드 순서.
+    with st.container(key="kpi-sticky-row"):
+        render_activity_kpis(events_f)
+        render_kpi_cards(orders_f, events_f, prev_orders, prev_events)
+
     tab_overview, tab_revenue, tab_behavior, tab_detail = st.tabs(
         ["개요", "매출 분석", "행동 분석", "상세 분석"]
     )
@@ -768,7 +824,6 @@ def render_charts():
                 }
             )
 
-        render_kpi_cards(orders_f, events_f, prev_orders, prev_events)
         render_customer_profile(users, events_f)
 
     with tab_revenue:
