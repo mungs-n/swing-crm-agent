@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ATHLEPA — 실시간 트래킹 데모</title>
+<style>
+  :root { --purple: #7C3AED; --border: #E5E0F5; --muted: #888699; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Pretendard", "Apple SD Gothic Neo", sans-serif;
+    background: #FAFAFC;
+    margin: 0;
+    padding: 32px 24px 80px;
+    color: #1F1B2E;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  header { margin-bottom: 24px; }
+  header h1 { font-size: 1.4rem; margin: 0 0 6px; }
+  header p { color: var(--muted); font-size: 0.85rem; margin: 0; }
+  .banner {
+    background: #F3EEFE; border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px 16px; font-size: 0.8rem; color: #5B21B6; margin-bottom: 24px;
+  }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; }
+  .card {
+    border: 1px solid var(--border); border-radius: 12px; padding: 16px;
+    background: white; display: flex; flex-direction: column; gap: 8px;
+  }
+  .card .thumb {
+    height: 100px; border-radius: 8px; background: linear-gradient(135deg, #F3EEFE, #E5E0F5);
+    display: flex; align-items: center; justify-content: center; font-size: 1.8rem;
+  }
+  .card h3 { font-size: 0.9rem; margin: 0; }
+  .card .price { color: var(--purple); font-weight: 700; font-size: 0.95rem; }
+  .card .cat { color: var(--muted); font-size: 0.75rem; }
+  .card button {
+    margin-top: 4px; border: none; border-radius: 8px; padding: 8px 10px;
+    font-size: 0.8rem; cursor: pointer; font-weight: 600;
+  }
+  .btn-cart { background: #F3EEFE; color: var(--purple); }
+  .btn-buy { background: var(--purple); color: white; }
+  .log-box {
+    margin-top: 32px; border: 1px solid var(--border); border-radius: 10px;
+    background: #14101F; color: #D8D2EE; padding: 14px 16px; font-size: 0.72rem;
+    font-family: "SFMono-Regular", Consolas, monospace; max-height: 220px; overflow-y: auto;
+  }
+  .log-box .title { color: #B7A9E8; margin-bottom: 8px; font-weight: 600; }
+  .log-line { padding: 2px 0; opacity: 0.9; white-space: pre-wrap; word-break: break-all; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>ATHLEPA 데모 쇼핑몰</h1>
+    <p>이 페이지는 실제 트래킹 스니펫이 심어진 예시 페이지입니다. 아래 버튼을 누르면 이벤트가 실시간으로 CRM의 events 테이블에 쌓입니다.</p>
+  </header>
+
+  <div class="banner">
+    이 페이지에서 발생시킨 이벤트는 CRM 대시보드의 활성 사용자 지표(DAU/WAU/MAU)와 퍼널 분석에 몇 초 안에 반영됩니다.
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="thumb">🩳</div>
+      <h3>에어핏 러닝 쇼츠</h3>
+      <div class="cat">하의</div>
+      <div class="price">₩39,000</div>
+      <button class="btn-cart" onclick="track('add_to_cart', 'P001', '하의', 39000, this)">장바구니 담기</button>
+      <button class="btn-buy" onclick="track('purchase', 'P001', '하의', 39000, this)">바로 구매</button>
+    </div>
+    <div class="card">
+      <div class="thumb">👟</div>
+      <h3>스피드 러닝화</h3>
+      <div class="cat">신발</div>
+      <div class="price">₩89,000</div>
+      <button class="btn-cart" onclick="track('add_to_cart', 'P002', '신발', 89000, this)">장바구니 담기</button>
+      <button class="btn-buy" onclick="track('purchase', 'P002', '신발', 89000, this)">바로 구매</button>
+    </div>
+    <div class="card">
+      <div class="thumb">🎽</div>
+      <h3>드라이핏 반팔</h3>
+      <div class="cat">상의</div>
+      <div class="price">₩29,000</div>
+      <button class="btn-cart" onclick="track('add_to_cart', 'P003', '상의', 29000, this)">장바구니 담기</button>
+      <button class="btn-buy" onclick="track('purchase', 'P003', '상의', 29000, this)">바로 구매</button>
+    </div>
+  </div>
+
+  <div class="log-box">
+    <div class="title">전송된 이벤트 로그</div>
+    <div id="log"></div>
+  </div>
+</div>
+
+<script
+  src="tracking.js"
+  data-api-key="athlepa_demo_9f3a7c21e6b84d0f"
+  data-endpoint="/track"
+  id="athlepa-tracker"
+></script>
+<script>
+  function log(line) {
+    var el = document.getElementById("log");
+    var div = document.createElement("div");
+    div.className = "log-line";
+    div.textContent = line;
+    el.prepend(div);
+  }
+
+  function track(eventType, productId, category, price, btn) {
+    var label = eventType === "purchase" ? "구매" : "장바구니 담기";
+    log(new Date().toLocaleTimeString() + "  " + label + " → " + category + " / " + productId + " / ₩" + price.toLocaleString());
+    window.athlepaTrack(eventType, { product_id: productId, category: category, price: price });
+    btn.textContent = "전송됨 ✓";
+    setTimeout(function () {
+      btn.textContent = eventType === "purchase" ? "바로 구매" : "장바구니 담기";
+    }, 900);
+  }
+
+  log("페이지 로드 — page_view 이벤트 자동 전송됨");
+</script>
+</body>
+</html>
