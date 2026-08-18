@@ -4,9 +4,8 @@ import plotly.graph_objects as go
 from dotenv import load_dotenv
 from datetime import timedelta
 
-from dashboard.charts import load_data
 from utils.auth import is_logged_in, render_login_form, render_logout_button
-from utils.data_loader import get_dataset_source, fmt_amount, currency_config
+from utils.data_loader import get_dataset_source, fmt_amount, currency_config, load_users_orders, load_recent_active_users
 
 PURPLE = "#7C3AED"
 
@@ -71,18 +70,27 @@ def render_home():
         )
 
     try:
-        users, orders, events = load_data(get_dataset_source())
-        orders = orders.copy()
-        orders["order_date"] = pd.to_datetime(orders["order_date"])
+        dataset_source = get_dataset_source()
+        # 홈 화면은 13만 행짜리 events 전체가 필요 없어서(대시보드 탭1만 그게 필요함),
+        # users/orders만 가볍게 불러온다 — 로그인 직후 첫 화면이 몇십 초씩 걸리던 걸 줄이기 위함.
+        users, orders = load_users_orders(dataset_source)
 
-        latest_date = events["timestamp"].max()
+        # events 없이도(예: 데이콘) 기준 날짜를 잡을 수 있도록, 주문일 최댓값을 기준일로 쓴다.
+        latest_date = orders["order_date"].max() if not orders.empty else pd.Timestamp.now()
 
-        # --- 최근 30일 vs 그 이전 30일 (실제 데이터 기반 증감) ---
-        active_30d = events[events["timestamp"] >= latest_date - timedelta(days=30)]["user_id"].nunique()
-        active_prev_30d = events[
-            (events["timestamp"] < latest_date - timedelta(days=30))
-            & (events["timestamp"] >= latest_date - timedelta(days=60))
-        ]["user_id"].nunique()
+        # --- 최근 30일 vs 그 이전 30일 활성 고객 (필요한 60일치, user_id/timestamp만 조회) ---
+        since = (latest_date - timedelta(days=60)).strftime("%Y-%m-%d")
+        until = latest_date.strftime("%Y-%m-%d")
+        recent_events = load_recent_active_users(dataset_source, since, until)
+
+        if recent_events.empty:
+            active_30d = active_prev_30d = 0
+        else:
+            active_30d = recent_events[recent_events["timestamp"] >= latest_date - timedelta(days=30)]["user_id"].nunique()
+            active_prev_30d = recent_events[
+                (recent_events["timestamp"] < latest_date - timedelta(days=30))
+                & (recent_events["timestamp"] >= latest_date - timedelta(days=60))
+            ]["user_id"].nunique()
         active_trend = _pct_delta(active_30d, active_prev_30d)
 
         gmv_total = orders["total_amount"].sum()
