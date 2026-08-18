@@ -85,7 +85,9 @@ def track(event: TrackEvent):
         "event_type": event.event_type,
         "product_id": event.product_id,
         "category": event.category,
-        "price": event.price,
+        # events.price는 int 컬럼이라 float(예: 39000.0)을 그대로 보내면
+        # "invalid input syntax for type integer" 에러가 난다.
+        "price": int(event.price) if event.price is not None else None,
     }
     get_client().table("events").insert(row).execute()
     return {"ok": True}
