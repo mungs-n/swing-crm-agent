@@ -1,14 +1,22 @@
+import os
+
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from dotenv import load_dotenv
 from datetime import timedelta
 
-from dashboard.charts import load_data
+from utils.auth import is_logged_in, render_login_form, render_signup_form, render_logout_button, render_onboarding_screen
+from utils.data_loader import DATASET_OPTIONS, get_dataset_source, fmt_amount, currency_config, load_users_orders, load_recent_active_users
 
 PURPLE = "#7C3AED"
 
 load_dotenv()
+
+# 로컬 개발 중엔 로그인 화면이 매번 번거로우므로, .env에 SKIP_LOGIN=true를 넣으면
+# 로그인 없이 데이터셋 선택만으로 바로 대시보드에 들어갈 수 있다.
+# 배포 환경(Render 등)에는 이 값을 넣지 않으므로 실제 데모/운영에서는 로그인이 그대로 유지된다.
+SKIP_LOGIN = os.getenv("SKIP_LOGIN", "false").lower() == "true"
 
 LOGO_PATH = "assets/ATHLEPA 로고.png"
 THEME_CSS_PATH = "assets/theme.css"
@@ -55,9 +63,10 @@ def _stat_card(label, value, trend_html="", sub="", alert=False, sub_inline=Fals
 
 
 def render_home():
+    company_name = st.session_state.get("auth_company_name", "ATHLEPA")
     col_head, col_badge = st.columns([5, 2])
     with col_head:
-        st.markdown("<h1>안녕하세요, ATHLEPA 팀</h1>", unsafe_allow_html=True)
+        st.markdown(f"<h1>안녕하세요, {company_name} 팀</h1>", unsafe_allow_html=True)
     with col_badge:
         st.markdown(
             "<div style='text-align:right;margin-top:10px'>"
@@ -68,18 +77,27 @@ def render_home():
         )
 
     try:
-        users, orders, events = load_data()
-        orders = orders.copy()
-        orders["order_date"] = pd.to_datetime(orders["order_date"])
+        dataset_source = get_dataset_source()
+        # 홈 화면은 13만 행짜리 events 전체가 필요 없어서(대시보드 탭1만 그게 필요함),
+        # users/orders만 가볍게 불러온다 — 로그인 직후 첫 화면이 몇십 초씩 걸리던 걸 줄이기 위함.
+        users, orders = load_users_orders(dataset_source)
 
-        latest_date = events["timestamp"].max()
+        # events 없이도(예: 데이콘) 기준 날짜를 잡을 수 있도록, 주문일 최댓값을 기준일로 쓴다.
+        latest_date = orders["order_date"].max() if not orders.empty else pd.Timestamp.now()
 
-        # --- 최근 30일 vs 그 이전 30일 (실제 데이터 기반 증감) ---
-        active_30d = events[events["timestamp"] >= latest_date - timedelta(days=30)]["user_id"].nunique()
-        active_prev_30d = events[
-            (events["timestamp"] < latest_date - timedelta(days=30))
-            & (events["timestamp"] >= latest_date - timedelta(days=60))
-        ]["user_id"].nunique()
+        # --- 최근 30일 vs 그 이전 30일 활성 고객 (필요한 60일치, user_id/timestamp만 조회) ---
+        since = (latest_date - timedelta(days=60)).strftime("%Y-%m-%d")
+        until = latest_date.strftime("%Y-%m-%d")
+        recent_events = load_recent_active_users(dataset_source, since, until)
+
+        if recent_events.empty:
+            active_30d = active_prev_30d = 0
+        else:
+            active_30d = recent_events[recent_events["timestamp"] >= latest_date - timedelta(days=30)]["user_id"].nunique()
+            active_prev_30d = recent_events[
+                (recent_events["timestamp"] < latest_date - timedelta(days=30))
+                & (recent_events["timestamp"] >= latest_date - timedelta(days=60))
+            ]["user_id"].nunique()
         active_trend = _pct_delta(active_30d, active_prev_30d)
 
         gmv_total = orders["total_amount"].sum()
@@ -94,9 +112,15 @@ def render_home():
         last_order = orders.groupby("user_id")["order_date"].max()
         dormant_count = int((last_order < latest_date - timedelta(days=60)).sum())
 
-        try:
-            history_df = pd.read_csv("data/campaign_history.csv")
-        except FileNotFoundError:
+        # 캠페인 발송 이력은 지금 ATHLEPA 계정 전용 기능(데이콘 등 다른 회사는 아직 캠페인을
+        # 운영하지 않음)이라, 다른 회사로 로그인했을 때 ATHLEPA의 캠페인 데이터가 그대로
+        # 보이면 안 된다. dataset_source가 athlepa일 때만 실제로 읽어온다.
+        if get_dataset_source() == "athlepa":
+            try:
+                history_df = pd.read_csv("data/campaign_history.csv")
+            except FileNotFoundError:
+                history_df = pd.DataFrame()
+        else:
             history_df = pd.DataFrame()
 
         this_month = pd.Timestamp.now().strftime("%Y-%m")
@@ -104,9 +128,12 @@ def render_home():
         scheduled_this_month = campaigns_this_month["상태"].astype(str).str.contains("예약").sum() if not campaigns_this_month.empty else 0
         completed_this_month = len(campaigns_this_month) - scheduled_this_month
 
-        try:
-            scheduled_df = pd.read_csv("data/scheduled_emails.csv", encoding="utf-8-sig")
-        except FileNotFoundError:
+        if get_dataset_source() == "athlepa":
+            try:
+                scheduled_df = pd.read_csv("data/scheduled_emails.csv", encoding="utf-8-sig")
+            except FileNotFoundError:
+                scheduled_df = pd.DataFrame()
+        else:
             scheduled_df = pd.DataFrame()
         next_scheduled = None
         if not scheduled_df.empty:
@@ -127,7 +154,7 @@ def render_home():
             )
         with kcol2:
             _stat_card(
-                "누적 GMV", f"₩{gmv_total / 1_000_000:.1f}M",
+                "누적 GMV", fmt_amount(gmv_total),
                 _trend_pill("up" if gmv_trend >= 0 else "down", f"{gmv_trend:+.1f}%"),
             )
         with kcol3:
@@ -156,7 +183,8 @@ def render_home():
                     if st.button("상세 보기", icon=":material/arrow_forward:", icon_position="right", type="tertiary", key="link_dashboard"):
                         st.switch_page("dashboard/page.py")
 
-                monthly = orders.set_index("order_date").resample("MS")["total_amount"].sum() / 1_000_000
+                cur = currency_config()
+                monthly = orders.set_index("order_date").resample("MS")["total_amount"].sum() / cur["scale"]
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(
                     x=[f"{d.month}월" for d in monthly.index],
@@ -164,7 +192,7 @@ def render_home():
                     mode="lines+markers",
                     line=dict(color=PURPLE, width=2),
                     marker=dict(size=5, color=PURPLE),
-                    hovertemplate="%{x}<br>GMV ₩%{y:.1f}M<extra></extra>",
+                    hovertemplate=f"%{{x}}<br>GMV {cur['symbol']}%{{y:.1f}}{cur['scale_label']}<extra></extra>",
                 ))
                 fig.update_layout(
                     height=150,
@@ -261,12 +289,37 @@ def render_home():
         st.warning("데이터 파일을 찾을 수 없습니다. data/ 폴더를 확인해주세요.")
 
 
-pg = st.navigation(
-    [
-        st.Page(render_home, title="홈", icon=":material/home:", default=True),
-        st.Page("dashboard/page.py", title="대시보드", icon=":material/dashboard:", url_path="dashboard"),
-        st.Page("ai_insights/page.py", title="고객 분석", icon=":material/group:", url_path="ai-insights"),
-        st.Page("automation/page.py", title="자동화", icon=":material/bolt:", url_path="automation"),
-    ]
-)
-pg.run()
+def _run_app():
+    pg = st.navigation(
+        [
+            st.Page(render_home, title="홈", icon=":material/home:", default=True),
+            st.Page("dashboard/page.py", title="대시보드", icon=":material/dashboard:", url_path="dashboard"),
+            st.Page("ai_insights/page.py", title="고객 분석", icon=":material/group:", url_path="ai-insights"),
+            st.Page("automation/page.py", title="자동화", icon=":material/bolt:", url_path="automation"),
+        ]
+    )
+    pg.run()
+
+
+if SKIP_LOGIN:
+    with st.sidebar:
+        st.caption("🔓 로그인 생략 모드 (로컬 개발용)")
+        dataset_source = st.selectbox(
+            "데이터셋",
+            options=list(DATASET_OPTIONS.keys()),
+            format_func=lambda k: DATASET_OPTIONS[k],
+            key="dev_dataset_select",
+        )
+    st.session_state["dataset_source"] = dataset_source
+    st.session_state.setdefault("auth_company_name", DATASET_OPTIONS[dataset_source])
+    _run_app()
+elif not is_logged_in():
+    if st.session_state.get("_auth_view") == "signup":
+        render_signup_form()
+    else:
+        render_login_form()
+elif st.session_state.get("_onboarding_keys"):
+    render_onboarding_screen()
+else:
+    render_logout_button()
+    _run_app()
