@@ -224,19 +224,40 @@ def render_gmv_chart(orders, granularity="월별"):
     st.plotly_chart(fig, width='stretch')
 
 
+def _mask_name(value):
+    """고객 실명을 첫 글자만 남기고 마스킹 (예: 김민수 -> 김*수, 이수 -> 이*)."""
+    if not isinstance(value, str) or not value:
+        return value
+    if len(value) == 1:
+        return "*"
+    if len(value) == 2:
+        return value[0] + "*"
+    return value[0] + "*" * (len(value) - 2) + value[-1]
+
+
+def _mask_sensitive(df):
+    """원본 데이터 팝오버에 실제 고객 이름이 그대로 노출되지 않도록 마스킹한 사본을 반환."""
+    if "name" not in df.columns:
+        return df
+    df = df.copy()
+    df["name"] = df["name"].map(_mask_name)
+    return df
+
+
 def _data_view_button(data, label="원본 데이터 보기"):
     """탭 상단에 배치하는 원본 데이터 보기 버튼. data는 DataFrame 하나 또는 {구분 라벨: DataFrame} 형태로 여러 개 전달 가능
     (팝오버로 뜨는 표 우측 상단 메뉴에서 CSV 다운로드도 가능). 팝오버 자체는 버튼 크기에 맞춰 작게 시작하지만,
-    안의 표에 고정 픽셀 너비를 줘서 옆으로 드래그하지 않고도 여러 컬럼이 한눈에 보이도록 넓게 펼침"""
+    안의 표에 고정 픽셀 너비를 줘서 옆으로 드래그하지 않고도 여러 컬럼이 한눈에 보이도록 넓게 펼침.
+    고객 실명(name 컬럼)은 민감정보라 표시 전에 마스킹한다."""
     with st.popover(label):
         if isinstance(data, dict):
             for i, (name, df) in enumerate(data.items()):
                 if i > 0:
                     st.markdown("---")
                 st.caption(name)
-                st.dataframe(df, width=850, hide_index=True)
+                st.dataframe(_mask_sensitive(df), width=850, hide_index=True)
         else:
-            st.dataframe(data, width=850, hide_index=True)
+            st.dataframe(_mask_sensitive(data), width=850, hide_index=True)
 
 
 def _render_ranked_bars(title, series, colors=None, value_fmt=None, icon=None):
@@ -462,7 +483,18 @@ def render_rfm_scatter(orders):
     """RFM 산포도 (버블 차트) - x:구매빈도, y:구매금액, color:최근성"""
     rfm = assign_segment(calculate_rfm(orders.copy()))
 
-    st.subheader("RFM 산포도")
+    st.subheader(
+        "RFM 산포도",
+        help=(
+            "RFM은 고객을 최근성(Recency)·구매빈도(Frequency)·구매금액(Monetary) "
+            "세 지표로 분류하는 방법이에요.\n\n"
+            "- **X축**: 구매 빈도 (많을수록 오른쪽)\n"
+            "- **Y축**: 구매 금액 (클수록 위쪽)\n"
+            "- **색상**: 마지막 구매 후 지난 일수 (연할수록 최근, 진할수록 오래됨)\n"
+            "- **점 크기**: 구매 금액에 비례\n\n"
+            "점에 마우스를 올리면 고객별 상세 정보도 볼 수 있어요."
+        ),
+    )
 
     fig = px.scatter(
         rfm,
