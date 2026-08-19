@@ -253,6 +253,29 @@ def tool_get_top_priority_issue(start_date: str, end_date: str) -> dict:
     }
 
 
+def tool_get_kpi_comparison(current_start: str, current_end: str, compare_start: str, compare_end: str) -> dict:
+    """두 기간의 핵심 지표(GMV/AOV/주문건수/전환율/재구매율)를 각각 계산해서 나란히 비교하고
+    증감률(delta_pct)까지 미리 계산해서 반환한다. '저번주보다', '지난달 대비 어때' 같은 비교
+    질문에 사용한다. 모델이 직접 두 숫자를 빼거나 나누게 하지 않기 위해, 증감률까지 이
+    함수가 계산해서 준다(다른 도구들과 같은 원칙: 숫자 계산은 항상 코드가 한다)."""
+    current = tool_get_kpi_summary(current_start, current_end)
+    compare = tool_get_kpi_summary(compare_start, compare_end)
+
+    def _delta_pct(cur_val, prev_val):
+        if not prev_val:
+            return None
+        return round((cur_val - prev_val) / prev_val * 100, 1)
+
+    compare_keys = ["GMV", "AOV", "주문_건수", "활성_고객_수", "구매_전환율_퍼센트", "재구매율_퍼센트"]
+    delta = {k: _delta_pct(current.get(k, 0), compare.get(k, 0)) for k in compare_keys}
+
+    return {
+        "현재_기간": current,
+        "비교_기간": compare,
+        "증감률_퍼센트(현재_기준_%p_아닌_증감률)": delta,
+    }
+
+
 def recommend_segment(start_date, end_date, users: pd.DataFrame, orders: pd.DataFrame, events: pd.DataFrame) -> str:
     """선택한 기간의 지표를 기준으로 탭3 PERSONAS 키 중 하나를 추천한다.
 
@@ -414,6 +437,20 @@ CHATBOT_TOOLS = [
             "required": ["start_date", "end_date"],
         },
     },
+    {
+        "name": "get_kpi_comparison",
+        "description": "두 기간의 핵심 지표(GMV/AOV/주문건수/전환율/재구매율)를 비교하고 증감률까지 계산해서 반환합니다. '저번주보다', '지난달 대비 어때' 같은 비교 질문에는 get_kpi_summary를 두 번 부르지 말고 반드시 이 도구를 쓰세요.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "current_start": {"type": "string", "description": "비교 기준(현재) 기간 시작일 (YYYY-MM-DD)"},
+                "current_end": {"type": "string", "description": "비교 기준(현재) 기간 종료일 (YYYY-MM-DD)"},
+                "compare_start": {"type": "string", "description": "비교 대상(과거) 기간 시작일 (YYYY-MM-DD)"},
+                "compare_end": {"type": "string", "description": "비교 대상(과거) 기간 종료일 (YYYY-MM-DD)"},
+            },
+            "required": ["current_start", "current_end", "compare_start", "compare_end"],
+        },
+    },
 ]
 
 TOOL_FUNCTIONS = {
@@ -424,7 +461,35 @@ TOOL_FUNCTIONS = {
     "get_persona_counts": tool_get_persona_counts,
     "get_cohort_retention": tool_get_cohort_retention,
     "get_top_priority_issue": tool_get_top_priority_issue,
+    "get_kpi_comparison": tool_get_kpi_comparison,
 }
+
+# 답변에 "출처 태그"/"생각 과정"을 보여줄 때 쓰는 사람이 읽기 좋은 라벨.
+# chart_key는 나중에 대시보드 쪽에서 같은 이름의 차트로 이동/강조하는 데 쓸 수 있도록
+# 붙여둔 것 — 아직 대시보드 쪽(dashboard/charts.py)에 대응 코드가 없으면 그냥 무시된다.
+TOOL_LABELS = {
+    "get_kpi_summary": {"label": "핵심 지표(GMV·AOV·전환율 등) 조회", "chart_key": "gmv"},
+    "get_kpi_comparison": {"label": "기간별 지표 비교", "chart_key": "gmv"},
+    "get_category_breakdown": {"label": "카테고리별 매출 조회", "chart_key": "category"},
+    "get_channel_breakdown": {"label": "유입 채널별 매출 조회", "chart_key": "channel"},
+    "get_segment_breakdown": {"label": "RFM 세그먼트별 매출 조회", "chart_key": "segment"},
+    "get_persona_counts": {"label": "페르소나별 고객 수 조회", "chart_key": "persona"},
+    "get_cohort_retention": {"label": "코호트 리텐션 조회", "chart_key": "cohort"},
+    "get_top_priority_issue": {"label": "시급한 세그먼트 진단", "chart_key": None},
+}
+
+
+def _describe_tool_call(name: str, tool_input: dict) -> str:
+    """도구 호출 1건을 사람이 읽을 수 있는 한 줄로 요약한다 (생각 과정 / 출처 표시용)."""
+    info = TOOL_LABELS.get(name, {"label": name})
+    label = info["label"]
+    if "current_start" in tool_input:
+        period = f"{tool_input.get('current_start', '')}~{tool_input.get('current_end', '')} vs {tool_input.get('compare_start', '')}~{tool_input.get('compare_end', '')}"
+    elif "start_date" in tool_input:
+        period = f"{tool_input.get('start_date', '')} ~ {tool_input.get('end_date', '')}"
+    else:
+        period = ""
+    return f"{label}" + (f" ({period})" if period else "")
 
 CHATBOT_SYSTEM_PROMPT = f"""당신은 ATHLEPA CRM 대시보드에 내장된 데이터 조회 챗봇입니다.
 
@@ -432,19 +497,33 @@ CHATBOT_SYSTEM_PROMPT = f"""당신은 ATHLEPA CRM 대시보드에 내장된 데�
 사용자가 "이번 주", "지난달", "최근" 같은 상대적 표현을 쓰면, 오늘 날짜가 아니라 이
 데이터의 마지막 날짜({DATASET_MAX_DATE})를 기준으로 계산하세요.
 
-질문은 아래 세 종류로 나뉩니다. 반드시 이 방식을 지키세요:
+질문은 아래 네 종류로 나뉩니다. 반드시 이 방식을 지키세요:
 
-1. 사실 조회형 (매출, 전환율, 세그먼트, 리텐션 등 데이터로 확인 가능한 질문)
+1. 사실 조회형 (매출, 전환율, 세그먼트, 리텐션 등 단순 수치 확인 질문)
    → 반드시 제공된 도구(tool)를 호출해서 실제 계산된 값을 받아온 뒤, 그 값만 근거로
-   답하세요. 도구를 쓰지 않고 스스로 숫자를 추정하거나 계산하지 마세요. 도구가 반환한
-   숫자를 다시 나누거나 곱해서 새로운 비율을 스스로 만들어내지도 마세요.
+   간결하게 답하세요. 도구를 쓰지 않고 스스로 숫자를 추정하거나 계산하지 마세요. 도구가
+   반환한 숫자를 다시 나누거나 곱해서 새로운 비율을 스스로 만들어내지도 마세요.
+   "저번주보다", "지난달 대비" 처럼 두 기간을 비교하는 질문이면 get_kpi_summary를
+   두 번 부르지 말고 반드시 get_kpi_comparison을 사용해서 증감률까지 받아오세요.
 
-2. 전략/의견형 (예: "전환율을 어떻게 올려야 할까?", "뭐가 더 필요할까?")
+2. 진단/분석형 (예: "왜 그래?", "무슨 문제야?", "지금 가장 시급한 문제는?")
+   → 단순 수치가 아니라 원인과 다음 행동까지 묻는 질문입니다. 반드시 아래 4단계 구조를
+   그대로 사용해서 답하세요 (각 단계를 굵게 표시된 소제목으로 구분):
+   **결과:** 무엇이 어떻게 됐는지 핵심 수치로 1문장.
+   **원인:** 그 결과가 왜 나왔는지, 도구가 반환한 값(예: 페르소나 분포, 채널별 매출 등)에
+     근거해서 1~2문장. 도구 결과로 확인되지 않는 원인은 추측이라는 걸 밝히세요.
+   **근거:** 이 진단에 사용한 지표 이름·기간·계산 기준을 짧게 명시하세요 (예: "2026-06-01~
+     2026-06-07 기간의 RFM 세그먼트별 매출 기준"). 사용자가 원본 데이터를 확인하고
+     싶어할 수 있다는 걸 염두에 두고 구체적으로 쓰세요.
+   **추천 액션:** 다음에 뭘 하면 좋을지 1문장. 이 액션은 검증된 사실이 아니라 제안이라는
+     점을 문장 안에서 자연스럽게 드러내세요.
+
+3. 전략/의견형 (예: "전환율을 어떻게 올려야 할까?", "뭐가 더 필요할까?")
    → 도구만으로는 답할 수 없는 질문입니다. 답변은 하되, 답변 맨 앞에 반드시
    ":material/lightbulb: **AI 의견** (검증된 사실이 아닌 참고용 제안입니다)"라는 문구를 그대로 넣고
    시작하세요. 가능하면 관련 도구를 먼저 호출해서 실제 지표를 근거로 함께 제시하세요.
 
-3. 무관한 질문 (매장/CRM 데이터와 전혀 관계없는 질문, 예: 날씨, 잡담, 이 챗봇의 정체 등)
+4. 무관한 질문 (매장/CRM 데이터와 전혀 관계없는 질문, 예: 날씨, 잡담, 이 챗봇의 정체 등)
    → 도구를 호출하지 말고, "죄송해요, 이 챗봇은 ATHLEPA 매장 데이터 관련 질문만 답할
    수 있어요."라고 정중히 안내하세요.
 
@@ -464,11 +543,17 @@ CHATBOT_SYSTEM_PROMPT = f"""당신은 ATHLEPA CRM 대시보드에 내장된 데�
 """
 
 
-def run_chatbot_turn(messages: list) -> str:
+def run_chatbot_turn(messages: list) -> tuple[str, list]:
     """messages: [{"role": "user"/"assistant", "content": "..."}] 형태의 대화 이력을 받아
-    필요하면 도구를 호출해가며 최종 답변 텍스트만 반환한다."""
+    필요하면 도구를 호출해가며 (최종 답변 텍스트, 실제로 호출한 도구 목록)을 반환한다.
+
+    도구 목록은 [{"name": ..., "input": {...}}, ...] 형태로, "출처 태그"·"생각 과정"
+    UI를 그리는 데 쓰인다. Claude의 진짜 내부 추론(hidden reasoning)이 아니라, 실제로
+    조회한 데이터 도구를 그대로 보여주는 것 — 근거를 투명하게 보여준다는 목적에는 오히려
+    이쪽이 더 정확하다(모델이 지어낸 것처럼 보이는 가짜 사고 과정을 만들지 않는다)."""
     client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
     working_messages = list(messages)
+    tool_calls = []
 
     for _ in range(4):  # 도구를 여러 번 호출하는 경우를 대비한 안전장치(무한루프 방지)
         response = client.messages.create(
@@ -480,7 +565,8 @@ def run_chatbot_turn(messages: list) -> str:
         )
 
         if response.stop_reason != "tool_use":
-            return "".join(block.text for block in response.content if block.type == "text").strip()
+            text = "".join(block.text for block in response.content if block.type == "text").strip()
+            return text, tool_calls
 
         working_messages.append({"role": "assistant", "content": response.content})
         tool_results = []
@@ -492,6 +578,7 @@ def run_chatbot_turn(messages: list) -> str:
                 result = func(**block.input) if func else {"오류": f"알 수 없는 도구: {block.name}"}
             except Exception as e:
                 result = {"오류": str(e)}
+            tool_calls.append({"name": block.name, "input": block.input})
             tool_results.append(
                 {
                     "type": "tool_result",
@@ -501,7 +588,7 @@ def run_chatbot_turn(messages: list) -> str:
             )
         working_messages.append({"role": "user", "content": tool_results})
 
-    return "죄송해요, 답변을 만드는 데 문제가 생겼어요. 다시 시도해주세요."
+    return "죄송해요, 답변을 만드는 데 문제가 생겼어요. 다시 시도해주세요.", tool_calls
 
 
 # ---------------------------------------------------------
@@ -511,9 +598,63 @@ def run_chatbot_turn(messages: list) -> str:
 EXAMPLE_QUESTIONS = [
     "지금 가장 시급한 문제는?",
     "이번 주 매출은 얼마야?",
-    "이번 주 전환율은 어떻게 돼?",
+    "저번 주보다 매출 늘었어?",
     "카테고리별 매출 순위 알려줘",
 ]
+
+EXECUTION_MODES = ["제안만 (승인 후 실행)", "완전 자동 실행"]
+
+# 플로팅 챗봇(FAB + 패널)을 CSS만으로 화면에 "떠 있게" 만드는 트릭.
+# st.container(key="...")가 만드는 div에 실제 클래스 이름(st-key-<key>)이 그대로 붙는다는
+# 걸 이용해서, 그 div에 position:fixed를 강제로 씌운다. Streamlit 버전이 바뀌면 이 클래스
+# 구조가 달라져서 깨질 수 있는데, 그럴 땐 브라우저 개발자 도구로 실제 클래스명을 다시
+# 확인해서 여기 선택자만 맞춰주면 된다.
+AI_CHAT_CSS = """
+<style>
+div[class*="st-key-ai-fab"] {
+    position: fixed; right: 28px; bottom: 28px; z-index: 999999; width: auto;
+}
+div[class*="st-key-ai-fab"] button {
+    border-radius: 999px; background: var(--athlepa-primary); color: #fff; border: none;
+    box-shadow: 0 6px 18px rgba(124,58,237,0.35); font-weight: 600; padding: 10px 18px;
+}
+div[class*="st-key-ai-fab"] button:hover { background: var(--athlepa-primary-hover); color: #fff; }
+
+/* 패널이 열려 있을 때, 화면 전체를 덮는 투명 버튼(빈 공간 클릭 시 닫기용).
+   패널(z-index 더 높음)이 그 위를 덮고 있어서, 패널 '바깥'을 눌렀을 때만 이 버튼이 눌린다. */
+div[class*="st-key-ai-overlay"] { position: fixed; inset: 0; z-index: 999997; }
+div[class*="st-key-ai-overlay"] button {
+    width: 100vw; height: 100vh; background: transparent; border: none; cursor: default;
+}
+
+div[class*="st-key-ai-panel"] {
+    position: fixed; right: 28px; bottom: 96px; width: 380px; max-height: 72vh;
+    background: #fff; border: 1px solid var(--athlepa-border); border-radius: 14px;
+    box-shadow: 0 16px 40px rgba(17,16,24,0.18); z-index: 999998;
+    overflow-y: auto; padding: 8px 14px 12px;
+}
+
+div[class*="st-key-ai-src-"] button {
+    font-size: 10.5px !important; padding: 2px 10px !important; height: auto !important;
+    min-height: 0 !important; border-radius: 999px !important;
+    border: 1px solid var(--athlepa-border) !important; background: #fff !important;
+    color: var(--athlepa-primary-hover) !important; margin: 0 4px 4px 0 !important;
+}
+div[class*="st-key-ai-src-"] button:hover:not(:disabled) {
+    border-color: var(--athlepa-primary) !important; background: var(--athlepa-secondary) !important;
+}
+
+div[class*="st-key-ai-fb-"] button {
+    padding: 2px 6px !important; font-size: 12px !important; height: auto !important;
+    min-height: 0 !important; border: none !important; opacity: 0.55;
+}
+div[class*="st-key-ai-fb-"] button:hover { opacity: 1; }
+
+div[class*="st-key-ai_chat_form"] button {
+    white-space: nowrap; padding-left: 10px !important; padding-right: 10px !important;
+}
+</style>
+"""
 
 
 def render_chat_text(text: str):
@@ -522,23 +663,98 @@ def render_chat_text(text: str):
     st.markdown(text)
 
 
+def _init_chat_state():
+    st.session_state.setdefault("chat_messages", [])
+    st.session_state.setdefault("chat_meta", [])
+    st.session_state.setdefault("chat_panel_open", False)
+    st.session_state.setdefault("chat_seen_count", 0)
+    st.session_state.setdefault("ai_execution_mode", EXECUTION_MODES[0])
+
+
 def _ask_chatbot(question: str):
-    """사용자 질문 1건을 대화 이력에 추가하고, 챗봇 답변까지 받아서 함께 기록한다."""
+    """사용자 질문 1건을 대화 이력에 추가하고, 챗봇 답변까지 받아서 메타데이터(출처/생각
+    과정)와 함께 기록한다.
+
+    chat_messages는 Claude API에 그대로 넘어가는 형식(role/content만 있어야 함)이라, 화면
+    표시용으로 추가한 정보(출처, 생각 과정, 피드백)는 섞지 않고 별도 리스트(chat_meta)에
+    같은 순서로 나란히 쌓는다."""
     st.session_state.chat_messages.append({"role": "user", "content": question})
-    with st.chat_message("user"):
-        st.markdown(question)
-    with st.chat_message("assistant"):
-        with st.spinner("데이터 확인 중..."):
-            try:
-                answer = run_chatbot_turn(st.session_state.chat_messages)
-            except Exception as e:
-                answer = f"죄송해요, 답변 중 오류가 발생했어요 ({e})."
-        render_chat_text(answer)
+    st.session_state.chat_meta.append({})
+
+    with st.spinner("데이터 확인 중..."):
+        try:
+            answer, tool_calls = run_chatbot_turn(st.session_state.chat_messages)
+        except Exception as e:
+            answer, tool_calls = f"죄송해요, 답변 중 오류가 발생했어요 ({e}).", []
+
+    thinking, sources, seen = [], [], set()
+    for call in tool_calls:
+        desc = _describe_tool_call(call["name"], call["input"])
+        thinking.append(desc)
+        chart_key = TOOL_LABELS.get(call["name"], {}).get("chart_key")
+        dedupe_key = (call["name"], chart_key)
+        if dedupe_key not in seen:
+            seen.add(dedupe_key)
+            sources.append({"label": desc, "chart_key": chart_key})
+
     st.session_state.chat_messages.append({"role": "assistant", "content": answer})
+    st.session_state.chat_meta.append({"sources": sources, "thinking": thinking, "feedback": None})
+
+
+def _jump_to_chart(chart_key: str):
+    """출처 태그를 클릭하면 대시보드 페이지로 이동하면서, 어떤 차트를 보고 있었는지
+    session_state에 남겨둔다. dashboard/charts.py 쪽에서 이 값(dashboard_highlight_chart)을
+    읽어서 해당 차트를 강조 표시해주는 코드는 아직 없다 — 그건 그 파일 담당자와 별도로
+    맞춰야 한다. 지금은 페이지 이동까지만 이 파일 안에서 완결된다."""
+    st.session_state["dashboard_highlight_chart"] = chart_key
+    st.switch_page("dashboard/page.py")
+
+
+def _render_feedback(idx: int, meta: dict):
+    """메시지 품질 확인용 👍/👎. 지금은 화면에만 표시되고 파일로 기록되지는 않는다."""
+    with st.container(key=f"ai-fb-{idx}"):
+        c1, c2, _ = st.columns([1, 1, 10])
+        with c1:
+            up_type = "primary" if meta.get("feedback") == "up" else "secondary"
+            if st.button("👍", key=f"fb_up_{idx}", type=up_type):
+                meta["feedback"] = None if meta.get("feedback") == "up" else "up"
+                st.rerun()
+        with c2:
+            down_type = "primary" if meta.get("feedback") == "down" else "secondary"
+            if st.button("👎", key=f"fb_down_{idx}", type=down_type):
+                meta["feedback"] = None if meta.get("feedback") == "down" else "down"
+                st.rerun()
+
+
+def _render_message(idx: int, msg: dict, meta: dict):
+    with st.chat_message(msg["role"]):
+        if msg["role"] != "assistant":
+            st.markdown(msg["content"])
+            return
+
+        thinking = meta.get("thinking") or []
+        if thinking:
+            with st.expander("🔍 생각 과정 보기", expanded=False):
+                for step in thinking:
+                    st.caption(f"· {step}")
+
+        render_chat_text(msg["content"])
+
+        sources = meta.get("sources") or []
+        if sources:
+            with st.container(key=f"ai-src-{idx}"):
+                for s_i, source in enumerate(sources):
+                    if source["chart_key"]:
+                        if st.button(f"📊 출처: {source['label']}", key=f"src_{idx}_{s_i}"):
+                            _jump_to_chart(source["chart_key"])
+                    else:
+                        st.button(f"출처: {source['label']}", key=f"src_{idx}_{s_i}", disabled=True)
+
+        _render_feedback(idx, meta)
 
 
 def render_status_badge():
-    """'AI 어시스턴트 온라인' 상태 배지 - 페이지 제목 옆에 나란히 배치 (2_AI_Insights.py에서 호출)"""
+    """'AI 어시스턴트 온라인' 상태 배지 - 페이지 제목 옆에 나란히 배치."""
     st.markdown(
         "<div style='text-align:right;margin-top:14px;font-size:11px;color:var(--athlepa-muted-text)'>"
         "<span style='display:inline-block;width:6px;height:6px;border-radius:50%;"
@@ -547,49 +763,98 @@ def render_status_badge():
     )
 
 
-def render_ai_panel():
-    """AI 챗봇 패널 - 2_AI_Insights.py에서 호출"""
-    if "chat_messages" not in st.session_state:
-        st.session_state.chat_messages = []
+def render_floating_chat(force_open_once: bool = False):
+    """모든 페이지 맨 아래에서 호출하는 플로팅 챗봇(FAB + 패널). ATHLEPA CRM 어디서든
+    같은 대화(session_state 공유)를 이어갈 수 있다.
 
-    # 예시 질문 클릭/입력창 전송/자동 트리거를 그 자리에서 바로 처리(_ask_chatbot 호출)하면,
-    # "예시 질문을 숨겨야 하는지" 판단이 이미 끝난 뒤에 메시지가 추가되는 꼴이라, 로딩
-    # 스피너가 도는 동안 예시 질문이 사라지지 않고 새 대화 위에 같이 떠 있는 상태가 잠깐
-    # 보인다. 그래서 클릭 즉시 처리하지 않고 "다음 질문" 표시만 남겨 rerun하고, 그
-    # rerun에서 (예시 질문을 숨길지 이미 알고 있는 상태로) 실제 호출을 처리한다.
+    force_open_once=True로 부르면('고객 분석' 페이지에서 사용) 이번 세션에서 아직 한 번도
+    자동으로 열어준 적이 없을 때만 패널을 미리 열어둔다. 사용자가 그 뒤 직접 닫으면
+    다시 강제로 열지 않는다."""
+    _init_chat_state()
+    st.markdown(AI_CHAT_CSS, unsafe_allow_html=True)
+
+    if force_open_once and not st.session_state.get("chat_auto_opened_once"):
+        st.session_state["chat_panel_open"] = True
+        st.session_state["chat_auto_opened_once"] = True
+
+    # 예시 질문 클릭/입력창 전송을 그 자리에서 바로 처리하면, "예시 질문을 숨겨야 하는지"
+    # 판단이 이미 끝난 뒤에 메시지가 추가되는 꼴이라 로딩 스피너가 도는 동안 예시 질문이
+    # 잠깐 같이 보인다. 그래서 클릭 즉시 처리하지 않고 "다음 질문" 표시만 남겨 rerun하고,
+    # 그 rerun에서 처리한다.
     pending_question = st.session_state.pop("pending_question", None)
-    if pending_question is None:
-        auto_trigger = st.session_state.pop("ai_auto_trigger", False)
-        if auto_trigger and not st.session_state.chat_messages:
-            pending_question = "지금 가장 시급한 문제는?"
+    if pending_question:
+        st.session_state["chat_panel_open"] = True
 
-    with st.container(key="ai_chat_wrapper"):
-        with st.chat_message("assistant"):
-            st.markdown(
-                "안녕하세요! ATHLEPA CRM AI 어시스턴트입니다.  \n"
-                "고객 데이터 분석, 세그먼트 조회 등 원하는 걸 물어보세요."
-            )
+    is_open = st.session_state["chat_panel_open"]
 
-        for msg in st.session_state.chat_messages:
-            with st.chat_message(msg["role"]):
-                if msg["role"] == "assistant":
-                    render_chat_text(msg["content"])
-                else:
-                    st.markdown(msg["content"])
+    if is_open:
+        with st.container(key="ai-overlay"):
+            if st.button("", key="ai_overlay_btn"):
+                st.session_state["chat_panel_open"] = False
+                st.rerun()
 
-        if not st.session_state.chat_messages and not pending_question:
-            with st.container(key="example_q_row"):
-                cols = st.columns(len(EXAMPLE_QUESTIONS))
-                for i, (col, q) in enumerate(zip(cols, EXAMPLE_QUESTIONS)):
-                    with col:
-                        if st.button(q, use_container_width=False, key=f"example_q_{i}"):
-                            st.session_state["pending_question"] = q
-                            st.rerun()
+        with st.container(key="ai-panel"):
+            head_l, head_r = st.columns([5, 1])
+            with head_l:
+                st.markdown("**🤖 AI 어시스턴트**")
+            with head_r:
+                if st.button("✕", key="ai_panel_close"):
+                    st.session_state["chat_panel_open"] = False
+                    st.rerun()
 
-        if pending_question:
-            _ask_chatbot(pending_question)
+            with st.expander("⚙️ AI 실행 권한", expanded=False):
+                current_mode = st.session_state["ai_execution_mode"]
+                chosen_mode = st.radio(
+                    "AI가 액션(캠페인 생성 등)을 제안했을 때",
+                    EXECUTION_MODES,
+                    index=EXECUTION_MODES.index(current_mode),
+                    key="ai_execution_mode_radio",
+                )
+                st.session_state["ai_execution_mode"] = chosen_mode
+                st.caption(
+                    "지금은 챗봇이 데이터를 '조회'만 하고 있어서 실제로 실행되는 액션은 "
+                    "아직 없어요. 나중에 자동화 기능이 연결되면 이 설정을 따르게 됩니다."
+                )
 
-    user_input = st.chat_input("고객 데이터에 대해 질문하세요...")
-    if user_input:
-        st.session_state["pending_question"] = user_input
-        st.rerun()
+            if not st.session_state.chat_messages:
+                st.markdown(
+                    "안녕하세요! ATHLEPA CRM AI 어시스턴트입니다.  \n"
+                    "고객 데이터 분석, 세그먼트 조회 등 원하는 걸 물어보세요."
+                )
+                cols = st.columns(2)
+                for i, q in enumerate(EXAMPLE_QUESTIONS):
+                    with cols[i % 2]:
+                        if st.button(q, key=f"example_q_{i}", use_container_width=True):
+                            pending_question = q
+
+            for idx, (msg, meta) in enumerate(zip(st.session_state.chat_messages, st.session_state.chat_meta)):
+                _render_message(idx, msg, meta)
+
+            if pending_question:
+                _ask_chatbot(pending_question)
+                st.rerun()
+
+            with st.form(key="ai_chat_form", clear_on_submit=True, border=False):
+                c1, c2 = st.columns([4, 1.3])
+                with c1:
+                    user_input = st.text_input(
+                        "질문", key="ai_chat_input_box", label_visibility="collapsed",
+                        placeholder="궁금한 걸 물어보세요",
+                    )
+                with c2:
+                    submitted = st.form_submit_button("보내기", use_container_width=True)
+            if submitted and user_input.strip():
+                st.session_state["pending_question"] = user_input.strip()
+                st.rerun()
+
+        st.session_state["chat_seen_count"] = len(st.session_state.chat_messages)
+
+    with st.container(key="ai-fab"):
+        unseen = len(st.session_state.chat_messages) - st.session_state["chat_seen_count"]
+        if is_open or unseen <= 0:
+            fab_label = "💬 AI 어시스턴트"
+        else:
+            fab_label = f"💬 AI 어시스턴트 · {unseen}"
+        if st.button(fab_label, key="ai_fab_btn"):
+            st.session_state["chat_panel_open"] = not is_open
+            st.rerun()
