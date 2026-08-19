@@ -41,7 +41,7 @@ def load_campaign_sends() -> pd.DataFrame:
     rows = []
     start = 0
     while True:
-        page = client.table("campaign_sends").select("*").range(start, start + _PAGE_SIZE - 1).execute().data
+        page = client.table("campaign_sends").select("*").order("id").range(start, start + _PAGE_SIZE - 1).execute().data
         rows.extend(page)
         if len(page) < _PAGE_SIZE:
             break
@@ -51,8 +51,11 @@ def load_campaign_sends() -> pd.DataFrame:
         return pd.DataFrame(columns=CAMPAIGN_SENDS_COLUMNS)
 
     df = pd.DataFrame(rows)
+    # format="ISO8601": 합성 데이터(초 단위)와 실시간 발송(마이크로초 단위)의 정밀도가
+    # 달라서, format을 지정하지 않으면 pandas가 앞부분 값으로 추론한 형식이 뒤에 나오는
+    # 다른 정밀도의 값에서 깨져 NaT가 되고, 그러면 날짜 필터에서 통째로 빠진다.
     for col in ["sent_at", "opened_at", "clicked_at"]:
-        df[col] = pd.to_datetime(df[col], errors="coerce")
+        df[col] = pd.to_datetime(df[col], errors="coerce", format="ISO8601")
     df["delivered"] = df["delivered"].astype(bool)
     return df
 

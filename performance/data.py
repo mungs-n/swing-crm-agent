@@ -82,7 +82,10 @@ def load_campaign_history() -> pd.DataFrame:
     if not rows:
         return pd.DataFrame(columns=CAMPAIGN_HISTORY_COLUMNS)
     df = pd.DataFrame(rows)
-    df["sent_at"] = pd.to_datetime(df["sent_at"], errors="coerce")
+    # format="ISO8601": 합성 데이터(초 단위)와 실시간 발송(마이크로초 단위)의 정밀도가
+    # 달라서, format 지정 없이는 pandas가 일부 행에서 파싱 실패해 NaT가 되고, 그러면
+    # 날짜 필터에서 그 캠페인이 통째로 빠진다 (ab_test/data.py와 동일한 이슈).
+    df["sent_at"] = pd.to_datetime(df["sent_at"], errors="coerce", format="ISO8601")
     return df
 
 
