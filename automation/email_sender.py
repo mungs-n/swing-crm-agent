@@ -5,7 +5,7 @@
 
 import streamlit as st
 import sendgrid
-from sendgrid.helpers.mail import Mail
+from sendgrid.helpers.mail import CustomArg, Mail
 import pandas as pd
 import os
 import uuid
@@ -33,10 +33,15 @@ def load_test_recipients():
         return pd.read_csv(TEST_RECIPIENTS_FILE, encoding="cp949")
 
 
-def send_email(to_email, subject, body, send_at: int | None = None):
+def send_email(to_email, subject, body, send_at: int | None = None, send_id: str | None = None):
     """SendGrid로 이메일을 보낸다. send_at(미래 시각의 unix timestamp)을 주면 지금 API를
     호출은 하지만, 실제 발송은 SendGrid가 그 시각에 알아서 처리한다 (예약 발송,
-    SendGrid 자체 제약으로 최대 72시간 이내만 가능)."""
+    SendGrid 자체 제약으로 최대 72시간 이내만 가능).
+
+    send_id를 주면 custom_args로 실어 보내서, SendGrid Event Webhook이 오픈/클릭 이벤트에
+    이 값을 그대로 실어 돌려준다 (ingestion_server의 /sendgrid-events가 이 값으로
+    campaign_sends 테이블의 어느 행을 업데이트할지 찾는다). campaign_sends에 해당
+    send_id로 행을 미리 만들어두지 않으면 업데이트 대상이 없어 이벤트가 무시된다."""
     sg = sendgrid.SendGridAPIClient(api_key=os.environ.get("SENDGRID_API_KEY"))
     message = Mail(
         from_email=os.environ.get("FROM_EMAIL"),
@@ -46,6 +51,8 @@ def send_email(to_email, subject, body, send_at: int | None = None):
     )
     if send_at is not None:
         message.send_at = send_at
+    if send_id is not None:
+        message.add_custom_arg(CustomArg("send_id", send_id))
     response = sg.send(message)
     return response.status_code
 
