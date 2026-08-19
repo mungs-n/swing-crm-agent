@@ -10,9 +10,12 @@ import pandas as pd
 from datetime import datetime, time as dtime, timedelta
 import os
 import random
+import uuid
 
 from utils.rfm import calculate_rfm, assign_segment
-from automation.email_sender import send_email, save_history, save_scheduled_emails, load_test_recipients, KST
+from automation.email_sender import (
+    send_email, save_history, save_scheduled_emails, load_test_recipients, record_campaign_send, KST,
+)
 
 load_dotenv()
 
@@ -485,14 +488,16 @@ def _render_step3():
                         lines = message.split("\n")
                         subject = lines[0].replace("제목: ", "").strip()
                         body = "\n".join(lines[2:]).replace("본문: ", "").strip()
-                        status = send_email(test_email, subject, body)
+                        send_id = str(uuid.uuid4())
+                        status = send_email(test_email, subject, body, send_id=send_id)
                         if status == 202:
                             st.markdown(
                                 "<div class='confirm-box'><span class='dot'>✓</span>"
                                 "<span style='font-size:11px;color:#047857'>테스트 메일이 발송되었습니다.</span></div>",
                                 unsafe_allow_html=True,
                             )
-                            save_history(segment, message, 1, "테스트 발송")
+                            campaign_id = save_history(segment, message, 1, "테스트 발송")
+                            record_campaign_send(campaign_id, test_email, segment, "email", send_id)
                         else:
                             st.error(f"발송 실패: SendGrid 응답 코드 {status}")
                     except Exception as e:
@@ -531,14 +536,21 @@ def _render_step3():
                             lines = message.split("\n")
                             subject = lines[0].replace("제목: ", "").strip()
                             body = "\n".join(lines[2:]).replace("본문: ", "").strip()
+                            campaign_id = str(uuid.uuid4())[:8]
 
                             success_count, fail_count, succeeded_emails = 0, 0, []
+                            succeeded_sends = []  # (email, send_id) - campaign_history 행이 생긴 뒤에 기록한다 (FK)
                             for _, row in recipients.iterrows():
                                 try:
-                                    status = send_email(row["email"], subject, body, send_at=send_at_ts)
+                                    send_id = str(uuid.uuid4())
+                                    status = send_email(row["email"], subject, body, send_at=send_at_ts, send_id=send_id)
                                     if status == 202:
                                         success_count += 1
                                         succeeded_emails.append(row["email"])
+                                        # 예약 발송은 SendGrid가 나중에 실제로 보내므로, 아직 발송되지
+                                        # 않은 시점에 delivered=True로 기록하면 안 된다 - 즉시 발송일 때만 기록한다.
+                                        if not is_future:
+                                            succeeded_sends.append((row["email"], send_id))
                                     else:
                                         fail_count += 1
                                 except Exception as e:
@@ -550,14 +562,20 @@ def _render_step3():
                                 if is_future:
                                     save_history(
                                         segment, message, success_count,
-                                        f"예약 등록 완료 ({target_dt.strftime('%Y-%m-%d %H:%M')} SendGrid 자동 발송 예정)"
+                                        f"예약 등록 완료 ({target_dt.strftime('%Y-%m-%d %H:%M')} SendGrid 자동 발송 예정)",
+                                        campaign_id=campaign_id,
                                     )
                                     save_scheduled_emails(segment, subject, succeeded_emails, target_dt)
                                 else:
                                     save_history(
                                         segment, message, success_count,
-                                        f"전체 발송 완료 (테스트 {success_count + fail_count}명 중 {success_count}명 성공)"
+                                        f"전체 발송 완료 (테스트 {success_count + fail_count}명 중 {success_count}명 성공)",
+                                        campaign_id=campaign_id,
                                     )
+                                    # campaign_history 행이 위 save_history()로 먼저 생겨야
+                                    # campaign_sends.campaign_id 외래키가 안 깨진다.
+                                    for email, send_id in succeeded_sends:
+                                        record_campaign_send(campaign_id, email, segment, "email", send_id)
                                 st.rerun()
                             else:
                                 st.error("발송에 실패했어요. SendGrid 설정을 확인해주세요.")
