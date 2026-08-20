@@ -9,10 +9,11 @@ import os
 from datetime import datetime, timezone
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from sendgrid.helpers.eventwebhook import EventWebhook
 from supabase import create_client
 
 load_dotenv()
@@ -126,6 +127,51 @@ def track(event: TrackEvent):
     except Exception as e:
         print(f"[track] insert 실패: {e}")
         raise HTTPException(status_code=500, detail="이벤트 저장에 실패했습니다")
+    return {"ok": True}
+
+
+_event_webhook_verifier = EventWebhook()
+_sendgrid_public_key = None
+
+
+def _get_sendgrid_public_key():
+    global _sendgrid_public_key
+    if _sendgrid_public_key is None:
+        _sendgrid_public_key = _event_webhook_verifier.convert_public_key_to_ecdsa(
+            os.environ["SENDGRID_WEBHOOK_PUBLIC_KEY"]
+        )
+    return _sendgrid_public_key
+
+
+@app.post("/sendgrid-events")
+async def sendgrid_events(request: Request):
+    """SendGrid Event Webhook 수신용. 이메일 발송 시 custom_args로 심어둔 send_id를 이용해
+    campaign_sends 테이블의 opened_at/clicked_at을 실시간으로 채워준다.
+    (email_sender.py에서 Mail 생성 시 custom_args={"send_id": ...}를 넣어야 send_id가 이벤트에 실려온다)"""
+    payload = await request.body()
+    signature = request.headers.get("X-Twilio-Email-Event-Webhook-Signature", "")
+    timestamp = request.headers.get("X-Twilio-Email-Event-Webhook-Timestamp", "")
+
+    if not _event_webhook_verifier.verify_signature(
+        payload.decode("utf-8"), signature, timestamp, _get_sendgrid_public_key()
+    ):
+        raise HTTPException(status_code=401, detail="서명 검증 실패")
+
+    events = await request.json()
+    client = get_client()
+    for e in events:
+        send_id = e.get("send_id")
+        event_type = e.get("event")
+        if not send_id or event_type not in ("open", "click"):
+            continue
+
+        column = "opened_at" if event_type == "open" else "clicked_at"
+        event_ts = datetime.fromtimestamp(e["timestamp"], tz=timezone.utc).isoformat()
+        try:
+            client.table("campaign_sends").update({column: event_ts}).eq("send_id", send_id).execute()
+        except Exception as ex:
+            print(f"[sendgrid-events] {send_id} {event_type} 업데이트 실패: {ex}")
+
     return {"ok": True}
 
 
