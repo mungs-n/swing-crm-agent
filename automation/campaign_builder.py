@@ -1,6 +1,6 @@
 """
 담당자: 탭2 담당자 A
-작업 내용: 세그먼트 분류, 캠페인 설정 UI, Claude 카피 생성
+작업 내용: 세그먼트 분류, 캠페인 설정 UI, Claude 카피 생성 및 멀티 채널(카톡/문자/푸시/메일) 발송 연동
 """
 
 import streamlit as st
@@ -10,23 +10,28 @@ import pandas as pd
 from datetime import datetime, time as dtime, timedelta
 import os
 import random
+import html
+import base64
+import re
+import streamlit.components.v1 as components 
 
 from utils.rfm import calculate_rfm, assign_segment
-from automation.email_sender import send_email, save_history, save_scheduled_emails, load_test_recipients, KST
+from automation.email_sender import (
+    send_email,
+    save_history,
+    save_scheduled_emails,
+    load_test_recipients,
+    KST,
+    REPEATING_FREQS,
+    WEEKDAY_LABELS,
+    register_recurring_campaign,
+)
 
 load_dotenv()
 
-STEP_LABELS = ["카피 작성", "발송 설정", "최종 확인"]
+STEP_LABELS = ["타겟/채널 선택 & 카피 생성", "발송 방식 설정", "최종 확인 & 발송"]
 
-
-# 타겟 옵션은 세 가지 서로 다른 방식으로 오디언스를 계산한다:
-# - "persona": data/generate_data.py가 가입 시점에 고정으로 부여한 성향 라벨(persona_type)
-# - "rfm": 최근 구매 행동(Recency/Frequency/Monetary) 기준으로 매번 다시 계산되는 등급.
-#   utils/rfm.py의 assign_segment()가 항상 4등급을 25%씩 균등하게 나눈다.
-# - "cart_abandon": 장바구니에 담았지만 구매 이벤트가 없는 고객 (행동 기반, 실시간 계산)
-#
-# "이탈 위험 고객"(persona)과 "RFM: 이탈 위험"은 이름은 비슷하지만 계산 기준이 달라서
-# 실제로는 서로 다른 사람 명단일 수 있다 — 라벨에 "RFM:" 접두어를 붙여 구분한다.
+# 타겟 옵션 정의
 TARGET_OPTIONS = {
     "신규 탐색자": {
         "kind": "persona", "key": "new_explorer", "count": 150,
@@ -74,11 +79,80 @@ TARGET_OPTIONS = {
     },
 }
 
+# ==============================================================================
+# 멀티 채널 API 발송 더미(Stub) 함수
+# ==============================================================================
+
+def send_kakaotalk(receiver_info: str, message: str, image=None, send_at=None) -> int:
+    return 202
+
+def send_sms_lms(receiver_info: str, message: str, image=None, send_at=None) -> int:
+    return 202
+
+import firebase_admin
+from firebase_admin import credentials, messaging
+
+if not firebase_admin._apps:
+    try:
+        cred = credentials.Certificate("serviceAccountKey.json")
+        firebase_admin.initialize_app(cred)
+    except Exception:
+        pass
+
+def send_web_push(receiver_info: str, message: str, image=None, send_at=None) -> int:
+    try:
+        msg = messaging.Message(
+            notification=messaging.Notification(
+                title="Athlepa 알림",
+                body=message,
+                image=image
+            ),
+            token=receiver_info,
+        )
+        messaging.send(msg)
+        return 200
+    except Exception as e:
+        print("FCM 발송 실패:", e)
+        return 500
+
+def send_campaign_message(channel: str, receiver_info: str, subject: str, body: str, image=None, send_at=None) -> int:
+    if "카카오톡" in channel:
+        full_msg = f"[{subject}]\n\n{body}" if subject else body
+        return send_kakaotalk(receiver_info, full_msg, image=image, send_at=send_at)
+    elif "문자" in channel:
+        full_msg = f"[{subject}]\n\n{body}" if subject else body
+        return send_sms_lms(receiver_info, full_msg, image=image, send_at=send_at)
+    elif "웹 푸시" in channel:
+        full_msg = f"{subject}\n{body}" if subject else body
+        return send_web_push(receiver_info, full_msg, image=image, send_at=send_at)
+    else:
+        return send_email(receiver_info, subject, body, send_at=send_at)
+
+# ==============================================================================
+
+def parse_message_text(raw_text: str):
+    if not raw_text:
+        return "", ""
+    
+    lines = raw_text.strip().split("\n")
+    subject = ""
+    body_lines = []
+
+    for line in lines:
+        clean_line = line.strip()
+        if clean_line.startswith("제목:"):
+            subject = clean_line.replace("제목:", "").strip()
+        elif clean_line.startswith("본문:"):
+            body_lines.append(clean_line.replace("본문:", "").strip())
+        else:
+            body_lines.append(clean_line)
+
+    body = "\n".join(body_lines).strip()
+    return subject, body
+
 
 def classify_persona(df_users: pd.DataFrame, df_orders: pd.DataFrame = None) -> pd.DataFrame:
-    """users.csv 및 orders.csv의 변수(가입일, 주문일, 할인/쿠폰 이력 등)를 이용한 자동 분류"""
     df = df_users.copy()
-    
     if df_orders is not None and not df_orders.empty:
         latest_orders = df_orders.groupby('user_id').agg(
             last_order_date=('order_date', 'max'),
@@ -88,12 +162,8 @@ def classify_persona(df_users: pd.DataFrame, df_orders: pd.DataFrame = None) -> 
         df = pd.merge(df, latest_orders, on='user_id', how='left')
     
     today = pd.to_datetime('today')
-    
-    if 'signup_date' in df.columns:
-        df['signup_date'] = pd.to_datetime(df['signup_date'])
-        df['days_since_signup'] = (today - df['signup_date']).dt.days
-    else:
-        df['days_since_signup'] = 999
+    df['signup_date'] = pd.to_datetime(df['signup_date']) if 'signup_date' in df.columns else today
+    df['days_since_signup'] = (today - df['signup_date']).dt.days
 
     if 'last_order_date' in df.columns:
         df['last_order_date'] = pd.to_datetime(df['last_order_date'])
@@ -119,7 +189,6 @@ def classify_persona(df_users: pd.DataFrame, df_orders: pd.DataFrame = None) -> 
 
 
 def load_all_datasets():
-    """CSV 데이터 파일 일괄 로드"""
     paths = {
         "users": ["users.csv", "data/users.csv"],
         "orders": ["orders.csv", "data/orders.csv"],
@@ -140,8 +209,6 @@ def load_all_datasets():
 
 
 def _rfm_audience_ids(df_orders: pd.DataFrame, tier: str) -> pd.Series:
-    """RFM 등급(VIP/충성 고객/이탈 위험/휴면)에 해당하는 user_id만 골라 반환.
-    utils.rfm.assign_segment()가 항상 4등급을 25%씩 균등하게 나눈다."""
     if df_orders.empty:
         return pd.Series(dtype=object)
     rfm = assign_segment(calculate_rfm(df_orders.copy()))
@@ -149,7 +216,6 @@ def _rfm_audience_ids(df_orders: pd.DataFrame, tier: str) -> pd.Series:
 
 
 def _cart_abandon_ids(df_events: pd.DataFrame) -> set:
-    """장바구니에 담았지만(add_to_cart) 구매(purchase) 이벤트가 없는 user_id 집합"""
     if df_events.empty or "event_type" not in df_events.columns:
         return set()
     cart_users = set(df_events.loc[df_events["event_type"] == "add_to_cart", "user_id"])
@@ -158,8 +224,6 @@ def _cart_abandon_ids(df_events: pd.DataFrame) -> set:
 
 
 def get_segment_info(segment_kr: str):
-    """선택한 타겟 옵션의 실제 오디언스 수와 통계(평균 연령, 선호 카테고리)를 계산한다.
-    옵션의 kind(persona/rfm/cart_abandon)에 따라 서로 다른 방식으로 대상을 추린다."""
     option = TARGET_OPTIONS.get(segment_kr, {})
     kind = option.get("kind", "persona")
     df_users, df_orders, df_events = load_all_datasets()
@@ -171,20 +235,16 @@ def get_segment_info(segment_kr: str):
         if "persona_type" not in df_users.columns:
             df_users = classify_persona(df_users, df_orders)
         target_users = df_users[df_users["persona_type"] == option.get("key")]
-
     elif kind == "rfm":
         target_ids = _rfm_audience_ids(df_orders, option.get("key"))
         target_users = df_users[df_users["user_id"].isin(target_ids)]
-
     elif kind == "cart_abandon":
         target_ids = _cart_abandon_ids(df_events)
         target_users = df_users[df_users["user_id"].isin(target_ids)]
-
     else:
         target_users = df_users.iloc[0:0]
 
     user_count = len(target_users)
-
     if user_count == 0:
         return option.get("count", 0), {}
 
@@ -194,90 +254,48 @@ def get_segment_info(segment_kr: str):
 
     return user_count, stats
 
-def generate_single_copy(segment_kr: str, persona_desc: list):
-    
+
+def generate_single_copy(segment_kr: str, persona_desc: list, channel: str = "카카오톡 🟡"):
+    channel_guides = {
+        "카카오톡 🟡": "카카오톡 메시지 형식으로 친근하고 가독성 있게 작성하세요. 줄바꿈과 이모지(😊, 🔥 등)를 적극적으로 활용하고, 하단에 행동 유도 버튼 문구를 포함하세요.",
+        "문자(SMS/LMS) 💬": "문자 메시지(SMS/LMS) 형식으로 작성하세요. 99바이트 이내의 짧고 명확한 핵심 위주 문장으로 작성하며 핵심 혜택을 직관적으로 보여주세요.",
+        "웹 푸시 🔔": "웹 브라우저 푸시 알림 형태입니다. 제목은 15자 이내로 극적인 호기심을 유도하고, 본문은 30자 이내의 아주 단문으로 클릭을 유도하도록 작성하세요.",
+        "이메일 ✉️": "이메일 형식으로 클릭을 부르는 서브젝트(제목)와 2~3문장 본문으로 구성하세요. 구체적인 혜택 내용과 Call to Action(행동 유도)을 명확하게 반영하세요.",
+    }
+
+    selected_guide = channel_guides.get(channel, channel_guides["카카오톡 🟡"])
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         yield "ANTHROPIC_API_KEY가 설정되지 않았습니다. .env 파일을 확인해주세요."
         return
 
+    k = min(len(persona_desc), random.randint(1, 2)) if persona_desc else 0
+    chosen_traits_list = random.sample(persona_desc, k) if k > 0 else ["일반 특성"]
+    chosen_traits_str = ", ".join(chosen_traits_list)
+
+    system_prompt = f"""당신은 스포츠 웨어 브랜드 'Athlepa'의 마케팅 카피라이터입니다.
+현재 선택된 발송 채널: {channel}
+[채널별 핵심 작성 가이드]: {selected_guide}
+
+작성 규칙:
+1. [필수] 특정 개인 이름을 언급하지 말고 해당 타겟 그룹 전체에게 대량 발송할 수 있는 매력적인 문장으로 작성하세요.
+2. [필수] 마크다운 문법(##, ---, **, *, ` 등)을 절대로 사용하지 마세요. 순수 텍스트로만 작성하세요.
+3. 이번 메시지에서 반영할 소구 포인트: {chosen_traits_str}
+4. 지정된 채널({channel})의 특성과 포맷 규칙을 엄격하게 준수하세요.
+
+형식:
+제목: (채널 특성에 맞춘 제목)
+본문: (채널 특성에 맞춘 본문)"""
+
     client = anthropic.Anthropic(api_key=api_key)
-    k = min(len(persona_desc), random.randint(1, 2))
-    chosen_traits = random.sample(persona_desc, k)
 
     with client.messages.stream(
         model="claude-sonnet-4-6",
         max_tokens=500,
-        system=f"""당신은 20~30대 여성에게 인기가 가장 많은 스포츠 웨어 브랜드 'Athlepa'의 마케팅 카피라이터입니다.
-        1. [필수] 특정 이름은 언급하지 말고 해당 페르소나 그룹 전체에게 대량 발송할 수 있는 매력적이면서도 보편적인 문장으로 작성하세요.
-        2. 이번 메일에서 반영할 소구 포인트는 아래로 한정합니다. 다른 특성은 언급하지 마세요. - {chosen_traits}
-        3. 구체적인 숫자, 시간, 혜택 디테일을 반영하여 작성하세요. 
-        4. 다음은 참고할 수 있는 실제 프로모션 메일입니다. 절대 똑같이 작성하지 말고 형식만 참고하세요. 형식도 마찬가지로 똑같이 작성하지 마세요.
-            제목: 2026년 수디오 여름세일 ☀️ 아직 진행중
-            본문: 햇살 가득한 여름, 언제 어디서나 좋아하는
-            사운드와 함께하세요. ☀️
-            지금 한정 기간 동안 최대 40% OFF
-
-            제목: (광고) 새로운 에코 컬렉션 출시!
-            본문: 주변의 시선보다 나만의 방식으로
-            LET THEM TALK
-            ㅇㅇㅇ과 함께한 새로운 에코 컬렉션을 만나보세요.
-
-            제목: (광고) New Galaxy, 지금 알림 신청해야 하는 이유📌
-            본문: 지금 어떤 폰을 사용하시나요?
-            Galaxy Unpacked
-            This timer has been deactivated.
-            곧 새롭게 펼쳐집니다. 
-
-            제목: (광고)저희가 또 해냈습니다!
-            본문: 세일
-            모든 상품 ₩2,500 이하
-            파격 할인을 받으려면 바로 열어보세요
-
-            제목: (광고) 슈퍼 마리오 ™ 컬렉션 출시!
-            본문: 파이프 드림
-            새로운 슈퍼 마리오™ 컬렉션이 출시되었어요!
-            성인부터 키즈, 토들러까지 모두를 위한 다양한 스타일이 준비되어 있어요. 마리오, 요시, 피치 공주 등 인기 캐릭터가 담긴 클래식 클로그와 함께 나만의 플레이어를 선택해보세요.
-            자, 출발!
-            즐거움을 더해보세요
-            요시 클래식 클로그와 함께 나만의 스타일을 완성해보세요.
-            요시 캐릭터 디테일과 사과, 요시 알 등의 지비츠™ 참이 더해져 더욱 특별한 매력을 선사합니다.
-
-            제목: ㅇㅇ님, 프로모션이 있어요 🎉
-            본문: 이번 주 차량 서비스 이용 시 50%만큼 아껴보세요
-            ㅇㅇ님, 이번주에 이용하시는 차량 서비스 10건을 50% 저렴하게 이용하세요. 2026년 7월 27일 AM 12:00까지 유효한 프로모션이 자동으로 계정에 적용되었습니다. 차량 서비스당 최대 NT$80 혜택을 받으세요.
-
-            제목: 따끈따끈한 최대 50% 할인을 받으세요
-            본문: 아직 늦지 않았어요!😛 첫 2회 주문 시 최대 50% 절약 혜택을 이용해 보세요. 
-            Uber Eats 프로모션 혜택은 원하는 방식으로 자유롭게 사용하실 수 있습니다. 단골 맛집에서 식사를 주문하거나 편의점에서 일주일 치 식료품과 생필품을 주문해 보세요. 어떤 방법으로 사용하시든 프로모션 혜택이 적용되니, 절약이 그 어느 때보다 쉬워진답니다. 
-            약관과 수수료가 적용됩니다. 결제 전에 프로모션 코드를 추가하여 할인을 받으세요. 
-            xxxd34sfxasdf
-
-            제목: 하나로 충분한 스트릿 아이템🧢
-            본문: 시선을 압도하는 스트릿 아이템, 지금 바로 매일 한정 특가로 만나보세요.
-
-            제목: 오후 8시, 크리니크 ~34% 특가💖
-            본문: 럭스에딧 3주년 스페셜 라이브! 
-            선착순 미니 파우치/브러쉬/클렌징밤 증정까지
-
-            제목: ㅇㅇㅇ 장기 고객님 혜택 안내 드립니다. 
-            본문: 뮤지컬 <그날들> 최대 50% 할인
-
-            제목: 쏠쏠한 혜택 [15,000원] 놓치면 안돼요🎉
-            본문: 가입과 동시에 드리는 할인 쿠폰!
-            어렵지 않아요! 바로 쿠폰 받고 치킨 먹기!🍗
-
-        5. 대량 발송이라는 점을 참고해서 개인화보다는 페르소나 그룹 전체에게 공감될 수 있는 문장으로 작성하세요. 
-        6. 주어진 페르소나 그룹 특성에 맞는 이메일을 한국어로 작성하세요.
-    형식:
-    제목: (15자 내외)
-    본문: (2-3문장) (내용에는 '본문:'이라는 라벨 단어를 포함하지 마세요.)""",
+        system=system_prompt,
         messages=[{
             "role": "user",
-            "content": f"""세그먼트: {segment_kr}
-    특성: {', '.join(chosen_traits)}
-
-    위 페르소나 그룹의 행동 정보를 자연스럽게 반영해 전체에게 일괄 발송할 이메일 카피를 작성해주세요. """
+            "content": f"세그먼트: {segment_kr}\n특성: {chosen_traits_str}\n발송 채널: {channel}\n\n위 조건에 맞춰 최적화된 마케팅 메시지를 작성해주세요."
         }]
     ) as stream:
         for text in stream.text_stream:
@@ -307,23 +325,153 @@ def _init_campaign_state():
     defaults = {
         "campaign_step": 1,
         "selected_segment": list(TARGET_OPTIONS.keys())[0],
+        "selected_channel": "카카오톡 🟡",
         "editable_copy": "",
         "target_count": 0,
         "generated_copy": "",
         "campaign_editing": False,
         "campaign_full_sent": False,
+        "campaign_image": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
 
 
+def render_channel_preview(channel: str, message: str, image_file=None):
+    if not message:
+        message = "작성된 메시지가 없습니다."
+
+    clean_text = re.sub(r'#{1,6}\s*', '', message)
+    clean_text = re.sub(r'^\s*[-*_]{3,}\s*$', '', clean_text, flags=re.MULTILINE)
+    clean_text = re.sub(r'\*\*(.*?)\*\*', r'\1', clean_text)
+
+    clean_message = html.escape(clean_text)
+    subject, body = parse_message_text(clean_message)
+    body_content = body.replace('\n', '<br/>')
+
+    img_tag = ""
+    if image_file:
+        try:
+            image_file.seek(0)
+            encoded = base64.b64encode(image_file.read()).decode("utf-8")
+            mime_type = image_file.type or "image/png"
+            img_tag = f'<img src="data:{mime_type};base64,{encoded}" style="width:100%; border-radius:12px; margin-top:8px; display:block;" />'
+        except Exception:
+            img_tag = ""
+
+    if "웹 푸시" in channel:
+        return f"""
+        <div style="background:#1e1e1e; padding:20px 12px; border-radius:24px; max-width:340px; margin:0 auto; box-shadow:0 10px 25px rgba(0,0,0,0.3); font-family:-apple-system, sans-serif;">
+            <div style="background:#f6f6f6; border-radius:16px; padding:14px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                    <div style="display:flex; align-items:center; gap:6px;">
+                        <span style="background:#4285f4; width:14px; height:14px; border-radius:4px; display:inline-block;"></span>
+                        <span style="font-size:12px; font-weight:600; color:#333;">Chrome</span>
+                    </div>
+                    <span style="font-size:11px; color:#888;">지금</span>
+                </div>
+                <div style="font-size:14px; font-weight:700; color:#111; margin-bottom:4px;">{subject or '제목입니다.'}</div>
+                <div style="font-size:13px; color:#444; line-height:1.4;">{body_content or '내용입니다.'}</div>
+                {img_tag}
+            </div>
+        </div>"""
+
+    elif "카카오톡" in channel:
+        return f"""
+        <div style="background:#abc0d0; padding:16px 10px; border-radius:24px; max-width:340px; margin:0 auto; font-family:-apple-system, sans-serif;">
+            <div style="background:#ffffff; border-radius:12px 12px 0 0; padding:10px 14px; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #f0f0f0;">
+                <span style="font-size:13px; font-weight:bold; color:#191919;">Athlepa <span style="color:#00c73c; font-size:10px;">✔</span></span>
+            </div>
+            <div style="background:#ffffff; border-radius:0 0 16px 16px; overflow:hidden; padding:14px;">
+                <div style="font-size:15px; font-weight:bold; color:#111; margin-bottom:8px;">{subject or '알림'}</div>
+                {img_tag}
+                <div style="font-size:13px; color:#333; line-height:1.5; margin-top:8px;">{body_content}</div>
+            </div>
+        </div>"""
+
+    elif "문자" in channel:
+        return f"""
+        <div style="background:#f2f2f7; padding:16px 10px; border-radius:24px; max-width:340px; margin:0 auto; font-family:-apple-system, sans-serif;">
+            <div style="background:#e9e9eb; border-radius:16px; padding:12px; font-size:13px; color:#000;">
+                {f'<div style="font-weight:bold; margin-bottom:6px;">(광고) {subject}</div>' if subject else ''}
+                {img_tag}
+                <div style="margin-top:6px;">{body_content}</div>
+            </div>
+        </div>"""
+
+    else:
+        return f"""
+        <div style="background:#ffffff; border:1px solid #e0e0e0; border-radius:20px; max-width:340px; margin:0 auto; padding:16px; font-family:-apple-system, sans-serif;">
+            <div style="font-size:15px; font-weight:bold; color:#111; margin-bottom:10px;">{subject or '제목 없음'}</div>
+            {img_tag}
+            <div style="font-size:13px; color:#333; line-height:1.5; margin-top:10px;">{body_content}</div>
+        </div>"""
+
+
+def inject_custom_css():
+    """요소 겹침을 방지하는 안정적인 레이아웃 CSS 스타일"""
+    st.markdown(
+        """
+        <style>
+        .message-preview {
+            background-color: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            padding: 12px;
+            font-size: 0.9rem;
+            line-height: 1.5;
+            color: #495057;
+            max-height: 240px;
+            min-height: 120px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            margin-bottom: 12px;
+            word-break: break-word;
+        }
+
+        .summary-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #f0f0f0;
+            font-size: 0.85rem;
+        }
+        .summary-label {
+            color: #666;
+            font-weight: 500;
+        }
+        .summary-value {
+            color: #111;
+            font-weight: 600;
+        }
+        .confirm-box {
+            background: #ecfdf5;
+            border: 1px solid #a7f3d0;
+            padding: 10px;
+            border-radius: 8px;
+            margin-top: 8px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .confirm-box .dot {
+            color: #047857;
+            font-weight: bold;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _render_step1():
     col_left, col_right = st.columns(2)
 
+    # --- 왼쪽: 옵션 설정 ---
     with col_left:
         with st.container(border=True):
-            st.markdown("<p style='font-size:0.8rem;font-weight:600'>캠페인 카피 생성</p>", unsafe_allow_html=True)
+            st.markdown("<p style='font-size:0.95rem; font-weight:700; margin-bottom: 12px;'>1. 타겟 및 채널 선택</p>", unsafe_allow_html=True)
 
             segments = list(TARGET_OPTIONS.keys())
             default_index = segments.index(st.session_state["selected_segment"])
@@ -332,34 +480,54 @@ def _render_step1():
                 "타겟 세그먼트",
                 options=segments,
                 index=default_index,
-                help="위 6개는 가입 시점에 정해진 고정 성향, 'RFM:'은 최근 구매 행동 기준으로 매번 다시 계산되는 등급, "
-                     "마지막은 장바구니에 담고 구매하지 않은 고객입니다.",
+                help="가입 성향, RFM 등급, 장바구니 이탈 등 발송 대상을 선택합니다.",
             )
+            st.session_state["selected_segment"] = selected_segment
+            
             option_info = TARGET_OPTIONS[selected_segment]
             real_count, _ = get_segment_info(selected_segment)
-            st.caption(f"대상 인원: {real_count}명")
-
-            st.session_state["selected_segment"] = selected_segment
             st.session_state["target_count"] = real_count
+            st.caption(f"🎯 대상 인원: **{real_count}명**")
+
+            st.markdown("<div style='margin-top: 12px;'></div>", unsafe_allow_html=True)
+
+            channel_options = ["카카오톡 🟡", "문자(SMS/LMS) 💬", "웹 푸시 🔔", "이메일 ✉️"]
+            ch_index = channel_options.index(st.session_state.get("selected_channel", "카카오톡 🟡"))
+            selected_channel = st.radio(
+                "발송 채널 선택",
+                options=channel_options,
+                index=ch_index,
+                help="선택한 채널의 형식과 규격에 맞춰 Claude가 카피를 생성합니다."
+            )
+            st.session_state["selected_channel"] = selected_channel
+
+            st.markdown("<div style='margin-top: 16px;'></div>", unsafe_allow_html=True)
 
             generate_btn = st.button(
-                "카피 자동 생성", icon=":material/auto_awesome:",
-                type="primary", use_container_width=True,
+                "채널 맞춤 카피 자동 생성", 
+                icon=":material/auto_awesome:",
+                type="primary", 
+                use_container_width=True,
+                key="btn_generate_copy"
             )
 
+    # --- 오른쪽: 카피 결과 ---
     with col_right:
         with st.container(border=True):
-            hcol1, hcol2 = st.columns([3, 1])
-            with hcol1:
-                st.markdown("<p style='font-size:0.8rem;font-weight:600'>발송 메시지</p>", unsafe_allow_html=True)
+            st.markdown(f"<p style='font-size:0.95rem; font-weight:700; margin-bottom: 12px;'>생성된 메시지 ({selected_channel})</p>", unsafe_allow_html=True)
+            
             area_placeholder = st.empty()
 
             if generate_btn:
                 full_response = ""
-                for chunk in generate_single_copy(selected_segment, option_info["desc"]):
+                for chunk in generate_single_copy(selected_segment, option_info["desc"], channel=selected_channel):
                     full_response += chunk
                     display_text = full_response.replace("본문:", "").strip()
-                    area_placeholder.text_area("발송 메시지", value=display_text, height=200, label_visibility="collapsed")
+                    area_placeholder.markdown(
+                        f"<div class='message-preview'>{display_text}</div>",
+                        unsafe_allow_html=True
+                    )
+                
                 final_text = full_response.replace("본문:", "").strip()
                 st.session_state["editable_copy"] = final_text
                 st.session_state["generated_copy"] = final_text
@@ -369,95 +537,168 @@ def _render_step1():
                 message = st.session_state.get("editable_copy", "")
                 if st.session_state["campaign_editing"]:
                     edited = area_placeholder.text_area(
-                        "발송 메시지", value=message, height=200,
-                        key="editing_text_area", label_visibility="collapsed",
+                        "발송 메시지", 
+                        value=message, 
+                        height=180,
+                        key="streaming_text_area_input",
+                        label_visibility="collapsed",
                     )
                     st.session_state["editable_copy"] = edited
                     st.session_state["generated_copy"] = edited
                 else:
                     with area_placeholder:
                         st.markdown(
-                            f"<div class='message-preview' style='min-height:170px'>"
-                            f"{message if message else '카피 자동 생성 버튼을 누르면 메시지가 표시됩니다.'}</div>",
+                            f"<div class='message-preview'>"
+                            f"{message if message else '세그먼트와 채널을 고른 후 [카피 자동 생성] 버튼을 누르면 채널에 최적화된 메시지가 작성됩니다.'}</div>",
                             unsafe_allow_html=True,
                         )
 
             fcol1, fcol2 = st.columns([3, 1])
             with fcol1:
-                st.caption(f"{len(st.session_state.get('editable_copy', ''))}자")
+                st.caption(f"글자 수: {len(st.session_state.get('editable_copy', ''))}자")
             with fcol2:
-                if message := st.session_state.get("editable_copy", ""):
-                    if st.session_state["campaign_editing"]:
-                        if st.button("완료", use_container_width=True, key="btn_edit_done"):
-                            st.session_state["campaign_editing"] = False
-                            st.rerun()
-                    else:
-                        if st.button("수정", use_container_width=True, key="btn_edit_start"):
-                            st.session_state["campaign_editing"] = True
-                            st.rerun()
+                message = st.session_state.get("editable_copy", "")
+                if message and st.session_state["campaign_editing"]:
+                    if st.button("완료", use_container_width=True, key="btn_edit_done"):
+                        st.session_state["campaign_editing"] = False
+                        st.rerun()
+                elif message and not st.session_state["campaign_editing"]:
+                    if st.button("수정", use_container_width=True, key="btn_edit_start"):
+                        st.session_state["campaign_editing"] = True
+                        st.rerun()
 
-    bcol1, bcol2 = st.columns(2)
-    with bcol2:
-        if st.button(
-            "다음 단계", icon=":material/arrow_forward:", icon_position="right",
-            type="primary", use_container_width=True,
-            disabled=not st.session_state.get("editable_copy", "").strip(),
-            key="btn_step1_next",
-        ):
-            st.session_state["campaign_step"] = 2
-            st.rerun()
+            st.markdown("<div style='margin-top: 12px;'></div>", unsafe_allow_html=True)
+
+            if st.button(
+                "다음 단계 (발송 방식 설정)", 
+                icon=":material/arrow_forward:", 
+                icon_position="right",
+                type="primary", 
+                use_container_width=True,
+                disabled=not st.session_state.get("editable_copy", "").strip(),
+                key="btn_step1_next",
+            ):
+                st.session_state["campaign_step"] = 2
+                st.rerun()
 
 
 def _render_step2():
-    col_left, col_right = st.columns(2)
+    col_left, col_right = st.columns([1, 1])
 
     with col_left:
         with st.container(border=True):
-            st.markdown("<p style='font-size:0.8rem;font-weight:600'>예약 발송 설정</p>", unsafe_allow_html=True)
-            dcol1, dcol2 = st.columns(2)
-            with dcol1:
-                st.date_input("발송 날짜", value=datetime.now().date(), key="schedule_date")
-            with dcol2:
-                st.time_input("발송 시간", value=dtime(9, 0), key="schedule_time")
+            st.markdown("<p style='font-size:0.95rem; font-weight:700; margin-bottom:12px;'>2. 발송 세부 설정</p>", unsafe_allow_html=True)
+            
+            trigger_type = st.selectbox("발송 방식", ["스케줄 기반", "이벤트 트리거 기반", "API 트리거 기반"])
+            
+            if trigger_type == "스케줄 기반":
+                send_freq = st.selectbox(
+                    "발송 빈도",
+                    ["즉시 발송", "1회 발송", "매일 발송", "3일마다", "일주일마다", "특정 요일 반복"],
+                    key="schedule_send_freq",
+                )
+
+                if send_freq == "즉시 발송":
+                    st.caption("전체 발송 버튼을 누르는 즉시 발송됩니다.")
+                    st.session_state["schedule_date"] = datetime.now().date()
+                    st.session_state["schedule_time"] = datetime.now().time()
+                else:
+                    dcol1, dcol2 = st.columns(2)
+                    with dcol1:
+                        st.date_input(
+                            "발송 날짜",
+                            value=st.session_state.get("schedule_date", datetime.now().date()),
+                            key="schedule_date",
+                        )
+                    with dcol2:
+                        st.time_input(
+                            "발송 시간",
+                            value=st.session_state.get("schedule_time", dtime(9, 0)),
+                            step=timedelta(minutes=5),
+                            key="schedule_time",
+                        )
+
+                    if send_freq in ("매일 발송", "3일마다", "일주일마다"):
+                        interval_label = {"매일 발송": "매일", "3일마다": "3일", "일주일마다": "일주일"}[send_freq]
+                        st.caption(f"⏱️ 선택한 날짜부터 {interval_label} 간격으로 반복 발송됩니다.")
+
+                    elif send_freq == "특정 요일 반복":
+                        selected_labels = st.multiselect(
+                            "반복 요일 선택",
+                            options=WEEKDAY_LABELS,
+                            default=[
+                                WEEKDAY_LABELS[i]
+                                for i in st.session_state.get("schedule_weekdays", [])
+                                if 0 <= i < len(WEEKDAY_LABELS)
+                            ],
+                            key="schedule_weekday_labels",
+                            help="선택한 요일마다, 설정한 시간에 반복 발송됩니다.",
+                        )
+                        st.session_state["schedule_weekdays"] = [
+                            WEEKDAY_LABELS.index(label) for label in selected_labels
+                        ]
+                        if not selected_labels:
+                            st.caption("⚠️ 반복할 요일을 1개 이상 선택해주세요.")
+                        else:
+                            st.caption(f"⏱️ 매주 {', '.join(selected_labels)}요일마다 반복 발송됩니다.")
+            elif trigger_type == "이벤트 트리거 기반":
+                st.selectbox("트리거 이벤트", ["장바구니 담기 후 미구매", "회원가입 완료", "첫 구매 완료"])
+            else:
+                st.text_input("API Endpoint Key", value="api_v1_campaign_trigger")
+
+            st.markdown("<div style='margin-top: 8px;'></div>", unsafe_allow_html=True)
+            uploaded_image = st.file_uploader("메시지 첨부 이미지 (선택)", type=["jpg", "png", "jpeg"])
+            if uploaded_image:
+                st.session_state["campaign_image"] = uploaded_image
 
     with col_right:
         with st.container(border=True):
-            st.markdown("<p style='font-size:0.8rem;font-weight:600'>메시지 확인</p>", unsafe_allow_html=True)
-            st.markdown(
-                f"<div class='message-preview'>{st.session_state.get('editable_copy', '')}</div>",
-                unsafe_allow_html=True,
-            )
+            channel = st.session_state.get("selected_channel", "카카오톡 🟡")
+            st.markdown(f"<p style='font-size:0.95rem; font-weight:700; margin-bottom:12px;'>📱 실시간 미리보기 ({channel})</p>", unsafe_allow_html=True)
+            
+            message = st.session_state.get("editable_copy", "")
+            img = st.session_state.get("campaign_image")
+            
+            preview_html = render_channel_preview(channel, message, image_file=img)
+            components.html(preview_html, height=430, scrolling=True)
 
+    st.markdown("<div style='margin-top: 16px;'></div>", unsafe_allow_html=True)
     bcol1, bcol2 = st.columns(2)
     with bcol1:
-        if st.button("이전", use_container_width=True, key="btn_step2_prev"):
+        if st.button("이전 단계", icon=":material/arrow_back:", use_container_width=True, key="btn_step2_prev"):
             st.session_state["campaign_step"] = 1
             st.rerun()
     with bcol2:
-        if st.button(
-            "다음 단계", icon=":material/arrow_forward:", icon_position="right",
-            type="primary", use_container_width=True, key="btn_step2_next",
-        ):
+        if st.button("다음 단계 (최종 확인)", icon=":material/arrow_forward:", icon_position="right", type="primary", use_container_width=True, key="btn_step2_next"):
             st.session_state["campaign_step"] = 3
             st.rerun()
 
 
 def _render_step3():
     segment = st.session_state["selected_segment"]
+    channel = st.session_state.get("selected_channel", "카카오톡 🟡")
     count = st.session_state["target_count"]
     message = st.session_state.get("editable_copy", "")
     send_date = st.session_state.get("schedule_date", datetime.now().date())
     send_time = st.session_state.get("schedule_time", dtime(9, 0))
+    img = st.session_state.get("campaign_image")
 
     col_left, col_right = st.columns(2)
 
     with col_left:
         with st.container(border=True):
-            st.markdown("<p style='font-size:0.8rem;font-weight:600'>발송 요약</p>", unsafe_allow_html=True)
+            st.markdown("<p style='font-size:0.95rem; font-weight:700; margin-bottom:12px;'>발송 요약</p>", unsafe_allow_html=True)
+            freq_display = st.session_state.get("schedule_send_freq", "즉시 발송")
+            if freq_display == "특정 요일 반복":
+                weekday_idxs = st.session_state.get("schedule_weekdays", [])
+                weekday_names = ", ".join(WEEKDAY_LABELS[i] for i in weekday_idxs) or "미선택"
+                freq_display = f"특정 요일 반복 ({weekday_names})"
+
             rows = [
                 ("타겟 세그먼트", segment),
+                ("발송 채널", channel),
                 ("대상 인원", f"{count}명"),
-                ("발송 채널", "이메일"),
+                ("발송 빈도", freq_display),
                 ("발송 날짜", str(send_date)),
                 ("발송 시간", send_time.strftime("%H:%M")),
             ]
@@ -469,107 +710,160 @@ def _render_step3():
             st.markdown(rows_html, unsafe_allow_html=True)
 
         with st.container(border=True):
-            st.markdown("<p style='font-size:0.8rem;font-weight:600'>메시지 미리보기</p>", unsafe_allow_html=True)
+            st.markdown("<p style='font-size:0.95rem; font-weight:700; margin-bottom:12px;'>메시지 내용</p>", unsafe_allow_html=True)
             st.markdown(f"<div class='message-preview'>{message}</div>", unsafe_allow_html=True)
 
     with col_right:
         with st.container(border=True):
-            st.markdown("<p style='font-size:0.8rem;font-weight:600'>테스트 발송</p>", unsafe_allow_html=True)
-            st.caption("실제 발송 전 내용을 확인하세요.")
-            test_email = st.text_input("수신 이메일", placeholder="본인 이메일 주소 입력", key="test_email_input", label_visibility="visible")
+            st.markdown("<p style='font-size:0.95rem; font-weight:700; margin-bottom:12px;'>테스트 발송</p>", unsafe_allow_html=True)
+            st.caption("실제 발송 전 테스트 수신자로 발송해 보세요.")
+            
+            placeholder_text = "휴대폰 번호 입력" if ("카카오톡" in channel or "문자" in channel) else "수신자 주소/ID 입력"
+            test_receiver = st.text_input("수신자 정보", placeholder=placeholder_text, key="test_receiver_input", label_visibility="visible")
+            
             if st.button("테스트 발송", use_container_width=True, key="btn_test_send"):
-                if not test_email:
-                    st.warning("이메일 주소를 입력해주세요.")
+                if not test_receiver:
+                    st.warning("수신자 정보를 입력해주세요.")
                 else:
                     try:
-                        lines = message.split("\n")
-                        subject = lines[0].replace("제목: ", "").strip()
-                        body = "\n".join(lines[2:]).replace("본문: ", "").strip()
-                        status = send_email(test_email, subject, body)
-                        if status == 202:
+                        subject, body = parse_message_text(message)
+                        status = send_campaign_message(channel, test_receiver, subject, body, image=img)
+                        
+                        if status in [200, 202]:
                             st.markdown(
-                                "<div class='confirm-box'><span class='dot'>✓</span>"
-                                "<span style='font-size:11px;color:#047857'>테스트 메일이 발송되었습니다.</span></div>",
+                                f"<div class='confirm-box'><span class='dot'>✓</span>"
+                                f"<span style='font-size:12px;color:#047857'>[{channel}] 테스트 메시지가 발송되었습니다.</span></div>",
                                 unsafe_allow_html=True,
                             )
-                            save_history(segment, message, 1, "테스트 발송")
+                            save_history(segment, message, 1, f"테스트 발송 ({channel})")
                         else:
-                            st.error(f"발송 실패: SendGrid 응답 코드 {status}")
+                            st.error(f"발송 실패: 응답 코드 {status}")
                     except Exception as e:
                         st.error(f"발송 실패: {e}")
 
-        st.markdown("<div style='height:2px'></div>", unsafe_allow_html=True)
-
         with st.container(border=True):
-            st.markdown("<p style='font-size:0.8rem;font-weight:600'>전체 발송</p>", unsafe_allow_html=True)
-            st.caption(f"{count}명 전체에게 발송됩니다. 발송 후 취소가 불가합니다.")
+            send_freq = st.session_state.get("schedule_send_freq", "즉시 발송")
+            is_repeating = send_freq in REPEATING_FREQS
+            weekdays = st.session_state.get("schedule_weekdays", []) if send_freq == "특정 요일 반복" else []
+            weekday_ready = send_freq != "특정 요일 반복" or len(weekdays) > 0
+
+            button_label = f"반복 발송 등록 ({count}명 대상)" if is_repeating else f"전체 발송 ({count}명)"
+
+            st.markdown("<p style='font-size:0.95rem; font-weight:700; margin-bottom:12px;'>전체 발송</p>", unsafe_allow_html=True)
+            if is_repeating:
+                interval_desc = {
+                    "매일 발송": "매일",
+                    "3일마다": "3일마다",
+                    "일주일마다": "일주일마다",
+                    "특정 요일 반복": "선택한 요일마다",
+                }[send_freq]
+                st.caption(f"{count}명 전체에게 [{channel}] 채널로 {interval_desc} 자동 반복 발송됩니다.")
+            else:
+                st.caption(f"{count}명 전체에게 [{channel}] 채널로 즉시/예약 발송됩니다.")
 
             if st.session_state["campaign_full_sent"]:
+                done_label = "반복 발송이 등록되었습니다." if is_repeating else "발송 완료 — 캠페인이 성공적으로 등록되었습니다."
                 st.markdown(
                     "<div class='confirm-box'><span class='dot'>✓</span>"
-                    "<span style='font-size:11px;color:#047857'>발송 완료 — 캠페인이 성공적으로 등록되었습니다.</span></div>",
+                    f"<span style='font-size:12px;color:#047857'>{done_label}</span></div>",
                     unsafe_allow_html=True,
                 )
             else:
-                if st.button(f"전체 발송 ({count}명)", icon=":material/rocket_launch:", type="primary", use_container_width=True, key="btn_full_send"):
-                    recipients = load_test_recipients()
-                    if recipients.empty:
-                        st.warning(
-                            "data/test_recipients.csv 에 등록된 테스트 수신자가 없습니다. "
-                            "name,email 컬럼으로 팀원 이메일을 등록해주세요."
-                        )
-                    else:
-                        target_dt = datetime.combine(send_date, send_time)
-                        if KST:
-                            target_dt = target_dt.replace(tzinfo=KST)
-                        now = datetime.now(KST) if KST else datetime.now()
-                        is_future = target_dt > now
-                        if is_future and target_dt > now + timedelta(hours=72):
-                            st.warning("SendGrid는 최대 72시간 이내 예약만 지원해요. 발송 설정 단계에서 시각을 다시 확인해주세요.")
-                        else:
-                            send_at_ts = int(target_dt.timestamp()) if is_future else None
-                            lines = message.split("\n")
-                            subject = lines[0].replace("제목: ", "").strip()
-                            body = "\n".join(lines[2:]).replace("본문: ", "").strip()
+                if not weekday_ready:
+                    st.warning("반복할 요일을 선택해주세요. (2단계에서 지정할 수 있습니다)")
 
-                            success_count, fail_count, succeeded_emails = 0, 0, []
+                if st.button(
+                    button_label,
+                    icon=":material/rocket_launch:",
+                    type="primary",
+                    use_container_width=True,
+                    disabled=not weekday_ready,
+                    key="btn_full_send",
+                ):
+                    subject, body = parse_message_text(message)
+
+                    if is_repeating:
+                        first_run = datetime.combine(send_date, send_time)
+                        register_recurring_campaign(
+                            segment=segment,
+                            channel=channel,
+                            subject=subject,
+                            body=body,
+                            image_file=img,
+                            freq=send_freq,
+                            first_run=first_run,
+                            send_time=send_time,
+                            weekdays=weekdays,
+                        )
+                        st.session_state["campaign_full_sent"] = True
+                        save_history(
+                            segment, message, count,
+                            f"반복 발송 등록 ({send_freq}, 첫 발송 {first_run.strftime('%Y-%m-%d %H:%M')} {channel})",
+                        )
+                        st.rerun()
+                    else:
+                        recipients = load_test_recipients()
+                        if recipients.empty:
+                            st.warning("data/test_recipients.csv 에 등록된 테스트 수신자가 없습니다.")
+                        else:
+                            is_immediate = send_freq == "즉시 발송"
+
+                            if is_immediate:
+                                target_dt = datetime.now(KST) if KST else datetime.now()
+                                is_future = False
+                                send_at_ts = None
+                            else:
+                                target_dt = datetime.combine(send_date, send_time)
+                                if KST:
+                                    target_dt = target_dt.replace(tzinfo=KST)
+                                now = datetime.now(KST) if KST else datetime.now()
+                                is_future = target_dt > now
+                                send_at_ts = int(target_dt.timestamp()) if is_future else None
+
+                            success_count, fail_count, succeeded_targets = 0, 0, []
+
                             for _, row in recipients.iterrows():
+                                target_info = row.get("phone", row.get("email", ""))
                                 try:
-                                    status = send_email(row["email"], subject, body, send_at=send_at_ts)
-                                    if status == 202:
+                                    status = send_campaign_message(channel, target_info, subject, body, image=img, send_at=send_at_ts)
+                                    if status in [200, 202]:
                                         success_count += 1
-                                        succeeded_emails.append(row["email"])
+                                        succeeded_targets.append(target_info)
                                     else:
                                         fail_count += 1
                                 except Exception as e:
                                     fail_count += 1
-                                    st.error(f"{row['email']} 발송 실패: {e}")
+                                    st.error(f"{target_info} 발송 실패: {e}")
 
                             if success_count:
                                 st.session_state["campaign_full_sent"] = True
                                 if is_future:
                                     save_history(
                                         segment, message, success_count,
-                                        f"예약 등록 완료 ({target_dt.strftime('%Y-%m-%d %H:%M')} SendGrid 자동 발송 예정)"
+                                        f"예약 등록 완료 ({target_dt.strftime('%Y-%m-%d %H:%M')} {channel} 자동 발송 예정)"
                                     )
-                                    save_scheduled_emails(segment, subject, succeeded_emails, target_dt)
+                                    save_scheduled_emails(segment, subject, succeeded_targets, target_dt)
                                 else:
                                     save_history(
                                         segment, message, success_count,
-                                        f"전체 발송 완료 (테스트 {success_count + fail_count}명 중 {success_count}명 성공)"
+                                        f"전체 발송 완료 ({channel} - {success_count + fail_count}명 중 {success_count}명 성공)"
                                     )
                                 st.rerun()
                             else:
-                                st.error("발송에 실패했어요. SendGrid 설정을 확인해주세요.")
+                                st.error("발송에 실패했어요. 설정을 확인해주세요.")
 
-        st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
-        if st.button("이전 단계", icon=":material/expand_less:", type="tertiary", key="btn_step3_prev"):
+    # --- Step 3 복구된 뒤로가기 버튼 ---
+    st.markdown("<div style='margin-top: 16px;'></div>", unsafe_allow_html=True)
+    bcol1, _ = st.columns([1, 1])
+    with bcol1:
+        if st.button("이전 단계 (발송 방식 설정)", icon=":material/arrow_back:", use_container_width=True, key="btn_step3_prev"):
             st.session_state["campaign_full_sent"] = False
             st.session_state["campaign_step"] = 2
             st.rerun()
 
 
 def render_campaign_builder():
+    inject_custom_css()
     _init_campaign_state()
     _step_indicator(st.session_state["campaign_step"])
 
