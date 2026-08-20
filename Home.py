@@ -300,6 +300,9 @@ def _run_app():
     )
     pg.run()
 
+    from ai_insights.chatbot import render_floating_chat
+    render_floating_chat(force_open_once=st.session_state.pop("_force_open_ai_chat", False))
+
 
 if SKIP_LOGIN:
     with st.sidebar:
