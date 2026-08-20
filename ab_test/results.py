@@ -6,8 +6,8 @@ A/B 테스트 결과 렌더링
 import pandas as pd
 import streamlit as st
 
-from ab_test.constants import ACCENT, EMERALD, ROSE, STATUS_META
-from ab_test.data import cvr, load_ab_tests, test_summary_counts, two_proportion_test
+from ab_test.constants import ACCENT, EMERALD, ROSE, STATUS_META, SUCCESS_METRICS
+from ab_test.data import METRIC_COUNT_FIELD, cvr, load_ab_tests, refresh_ab_test_stats, test_summary_counts, two_proportion_test
 
 
 def render_summary_header():
@@ -38,18 +38,21 @@ def _status_badge(status: str) -> str:
     )
 
 
-def _render_group_table(test_df: pd.DataFrame):
+def _render_group_table(test_df: pd.DataFrame, success_metric: str = "conversion"):
+    count_field = METRIC_COUNT_FIELD.get(success_metric, "conversions")
+    metric_label = SUCCESS_METRICS.get(success_metric, SUCCESS_METRICS["conversion"])
+
     control = test_df[test_df["is_control"]]
     baseline = control.iloc[0] if not control.empty else test_df.iloc[0]
 
     rows_html = []
     for _, g in test_df.iterrows():
-        rate = cvr(g["users"], g["conversions"])
+        rate = cvr(g["users"], g[count_field])
         if g["group_id"] == baseline["group_id"]:
             uplift, ci, p_value = None, None, None
         else:
             uplift, ci, p_value = two_proportion_test(
-                int(baseline["users"]), int(baseline["conversions"]), int(g["users"]), int(g["conversions"])
+                int(baseline["users"]), int(baseline[count_field]), int(g["users"]), int(g[count_field])
             )
 
         tag = ""
@@ -80,7 +83,7 @@ def _render_group_table(test_df: pd.DataFrame):
             "<tr style='border-bottom:1px solid #E7E9F3'>"
             f"<td style='padding:10px;font-weight:700'>{g['group_label']}{tag}</td>"
             f"<td style='padding:10px'>{int(g['users']):,}</td>"
-            f"<td style='padding:10px'>{int(g['conversions']):,}</td>"
+            f"<td style='padding:10px'>{int(g[count_field]):,}</td>"
             f"<td style='padding:10px;font-weight:700'>{rate:.1f}%</td>"
             f"<td style='padding:10px'>{uplift_html}</td>"
             f"<td style='padding:10px;color:#6B7280'>{ci_html}</td>"
@@ -89,7 +92,7 @@ def _render_group_table(test_df: pd.DataFrame):
             "</tr>"
         )
 
-    headers = ["그룹", "총 유저 수", "전환 이벤트 수", "전환율", "기준 대비 개선율", "차이 95% CI(%p)", "p-value", "유의성"]
+    headers = ["그룹", "총 유저 수", f"{metric_label} 이벤트 수", metric_label, "기준 대비 개선율", "차이 95% CI(%p)", "p-value", "유의성"]
     header_html = "".join(f"<th style='text-align:left;padding:8px 10px;color:#6B7280;font-size:11.5px'>{h}</th>" for h in headers)
     table_html = (
         "<table style='width:100%;border-collapse:collapse;font-size:13px'>"
@@ -103,6 +106,7 @@ def _render_group_table(test_df: pd.DataFrame):
 def render_results():
     """생성된 A/B 테스트들을 테스트 단위로 카드에 렌더링. automation/page.py의
     'A/B 테스트' 서브탭에서 render_wizard() 아래에 이어서 호출."""
+    refresh_ab_test_stats()
     ab_df = load_ab_tests()
     if ab_df.empty:
         st.info("아직 생성된 A/B 테스트가 없어요. 위에서 새 테스트를 만들어보세요.")
@@ -133,7 +137,7 @@ def render_results():
                         st.rerun()
 
             st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-            _render_group_table(test_df)
+            _render_group_table(test_df, test_df["success_metric"].iloc[0])
 
 
 def _end_test(test_id: str, winner_label: str, test_df: pd.DataFrame):
@@ -143,6 +147,12 @@ def _end_test(test_id: str, winner_label: str, test_df: pd.DataFrame):
 
     full_df = load_ab_tests()
     mask = full_df["test_id"] == test_id
+    # winner_group_id/ended_at은 처음엔 전부 빈 문자열("")이라 CSV 왕복 후 NaN/NaT로
+    # 읽혀서, 문자열을 그대로 대입하면 pandas가 dtype 불일치로 TypeError를 던진다.
+    # object dtype으로 캐스팅해서 문자열을 담을 수 있게 만든 뒤 대입해야 한다.
+    full_df["winner_group_id"] = full_df["winner_group_id"].astype(object)
+    full_df["ended_at"] = full_df["ended_at"].astype(object)
+
     full_df.loc[mask, "status"] = "완료"
     full_df.loc[mask, "winner_group_id"] = winner_group_id
     full_df.loc[mask, "ended_at"] = pd.Timestamp.now().isoformat()
