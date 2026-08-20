@@ -143,6 +143,12 @@ def _end_test(test_id: str, winner_label: str, test_df: pd.DataFrame):
 
     full_df = load_ab_tests()
     mask = full_df["test_id"] == test_id
+    # winner_group_id/ended_at은 처음엔 전부 빈 문자열("")이라 CSV 왕복 후 NaN/NaT로
+    # 읽혀서, 문자열을 그대로 대입하면 pandas가 dtype 불일치로 TypeError를 던진다.
+    # object dtype으로 캐스팅해서 문자열을 담을 수 있게 만든 뒤 대입해야 한다.
+    full_df["winner_group_id"] = full_df["winner_group_id"].astype(object)
+    full_df["ended_at"] = full_df["ended_at"].astype(object)
+
     full_df.loc[mask, "status"] = "완료"
     full_df.loc[mask, "winner_group_id"] = winner_group_id
     full_df.loc[mask, "ended_at"] = pd.Timestamp.now().isoformat()
