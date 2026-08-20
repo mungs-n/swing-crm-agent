@@ -131,6 +131,25 @@ PERSONA_KR = {
 }
 
 
+def _annotate_rank_deviation(items: list, value_key: str) -> list:
+    """순위형 목록(카테고리별/채널별/세그먼트별 매출, 페르소나별 고객 수 등)에 '평균 대비
+    배율', '1위와의 격차(%)'를 코드가 미리 계산해서 붙여준다.
+
+    LLM한테 원본 숫자만 던져주고 "이걸로 분석해줘"라고 맡기면, 뭐가 특이한 포인트인지
+    스스로 판단해야 해서 안전하고 뭉뚱그린 일반론으로 답하는 경향이 있다. 대신 "뭐가
+    특이한지"는 여기서 코드가 미리 찾아서 수치로 넘겨주고, LLM한테는 "이 수치를 자연어로
+    설명만 해"라고 역할을 좁혀주면 훨씬 구체적인 답이 나온다."""
+    if not items:
+        return items
+    values = [it[value_key] for it in items]
+    avg = sum(values) / len(values)
+    top = values[0]
+    for it in items:
+        it["평균_대비_배율"] = round(it[value_key] / avg, 2) if avg else None
+        it["1위와의_격차_퍼센트"] = round((top - it[value_key]) / top * 100, 1) if top else 0.0
+    return items
+
+
 def tool_get_kpi_summary(start_date: str, end_date: str) -> dict:
     """특정 기간의 GMV/AOV/주문 건수/활성 고객 수/구매 전환율/장바구니 이탈률/재구매율"""
     users, orders, events = load_data()
@@ -170,9 +189,10 @@ def tool_get_category_breakdown(start_date: str, end_date: str) -> dict:
     if period_orders.empty:
         return {"기간": f"{start_date} ~ {end_date}", "카테고리별_매출": []}
     breakdown = period_orders.groupby("category")["total_amount"].sum().sort_values(ascending=False)
+    items = [{"카테고리": k, "매출": int(v)} for k, v in breakdown.items()]
     return {
         "기간": f"{start_date} ~ {end_date}",
-        "카테고리별_매출": [{"카테고리": k, "매출": int(v)} for k, v in breakdown.items()],
+        "카테고리별_매출": _annotate_rank_deviation(items, "매출"),
     }
 
 
@@ -185,9 +205,10 @@ def tool_get_channel_breakdown(start_date: str, end_date: str) -> dict:
         return {"기간": f"{start_date} ~ {end_date}", "채널별_매출": []}
     merged = period_orders.merge(users[["user_id", "acquisition_channel"]], on="user_id")
     breakdown = merged.groupby("acquisition_channel")["total_amount"].sum().sort_values(ascending=False)
+    items = [{"채널": CHANNEL_KR.get(k, k), "매출": int(v)} for k, v in breakdown.items()]
     return {
         "기간": f"{start_date} ~ {end_date}",
-        "채널별_매출": [{"채널": CHANNEL_KR.get(k, k), "매출": int(v)} for k, v in breakdown.items()],
+        "채널별_매출": _annotate_rank_deviation(items, "매출"),
     }
 
 
@@ -201,9 +222,10 @@ def tool_get_segment_breakdown(start_date: str, end_date: str) -> dict:
         return {"기간": f"{start_date} ~ {end_date}", "세그먼트별_매출": []}
     rfm = assign_segment(calculate_rfm(period_orders.copy()))
     breakdown = rfm.groupby("segment")["Monetary"].sum().sort_values(ascending=False)
+    items = [{"세그먼트": k, "매출": int(v)} for k, v in breakdown.items()]
     return {
         "기간": f"{start_date} ~ {end_date}",
-        "세그먼트별_매출": [{"세그먼트": k, "매출": int(v)} for k, v in breakdown.items()],
+        "세그먼트별_매출": _annotate_rank_deviation(items, "매출"),
     }
 
 
@@ -212,9 +234,10 @@ def tool_get_persona_counts() -> dict:
     휴면 고객)로 분류한 고객 수. 데이터 생성 시 고정된 라벨이라 기간과 무관하게 항상 같은 값이다."""
     users, _, _ = load_data()
     counts = users["persona_type"].value_counts()
+    items = [{"페르소나": PERSONA_KR.get(k, k), "고객수": int(v)} for k, v in counts.items()]
     return {
         "전체_고객_수": len(users),
-        "페르소나별_고객_수": [{"페르소나": PERSONA_KR.get(k, k), "고객수": int(v)} for k, v in counts.items()],
+        "페르소나별_고객_수": _annotate_rank_deviation(items, "고객수"),
     }
 
 
@@ -287,13 +310,16 @@ def tool_get_gmv_trend(start_date: str, end_date: str) -> dict:
     monthly = period_orders.copy()
     monthly["월"] = monthly["order_date"].dt.to_period("M").astype(str)
     grouped = monthly.groupby("월").agg(GMV=("total_amount", "sum"), 주문_수=("order_id", "count")).reset_index()
-    return {
-        "기간": f"{start_date} ~ {end_date}",
-        "월별_추이": [
-            {"월": row["월"], "GMV": int(row["GMV"]), "주문_수": int(row["주문_수"])}
-            for _, row in grouped.iterrows()
-        ],
-    }
+    rows, prev_gmv = [], None
+    for _, row in grouped.iterrows():
+        gmv = int(row["GMV"])
+        # 전월 대비 증감률도 여기서 미리 계산해서 준다 — LLM이 "추세가 어때?" 질문에
+        # 매번 자기가 앞뒤 달 숫자를 빼고 나누게 하지 않기 위해서다(다른 도구들과 같은
+        # 원칙: 숫자 계산은 항상 코드가 한다).
+        delta = round((gmv - prev_gmv) / prev_gmv * 100, 1) if prev_gmv else None
+        rows.append({"월": row["월"], "GMV": gmv, "주문_수": int(row["주문_수"]), "전월_대비_증감률_퍼센트": delta})
+        prev_gmv = gmv
+    return {"기간": f"{start_date} ~ {end_date}", "월별_추이": rows}
 
 
 def tool_get_purchase_funnel(start_date: str, end_date: str) -> dict:
@@ -335,18 +361,22 @@ def tool_get_rfm_summary(start_date: str, end_date: str) -> dict:
         평균_구매빈도=("Frequency", "mean"),
         평균_구매금액=("Monetary", "mean"),
     ).reset_index()
+    items = [
+        {
+            "세그먼트": str(row["segment"]),
+            "고객수": int(row["고객수"]),
+            "평균_최근성_일": round(float(row["평균_최근성_일"]), 1),
+            "평균_구매빈도": round(float(row["평균_구매빈도"]), 1),
+            "평균_구매금액": int(row["평균_구매금액"]),
+        }
+        for _, row in grouped.iterrows()
+    ]
+    # groupby 결과는 세그먼트 이름 순서로 나오지, 매출 큰 순서가 아니다.
+    # _annotate_rank_deviation은 items[0]을 "1위"로 취급하므로, 반드시 먼저 정렬해야 한다.
+    items.sort(key=lambda r: r["평균_구매금액"], reverse=True)
     return {
         "기간": f"{start_date} ~ {end_date}",
-        "세그먼트별_RFM": [
-            {
-                "세그먼트": str(row["segment"]),
-                "고객수": int(row["고객수"]),
-                "평균_최근성_일": round(float(row["평균_최근성_일"]), 1),
-                "평균_구매빈도": round(float(row["평균_구매빈도"]), 1),
-                "평균_구매금액": int(row["평균_구매금액"]),
-            }
-            for _, row in grouped.iterrows()
-        ],
+        "세그먼트별_RFM": _annotate_rank_deviation(items, "평균_구매금액"),
     }
 
 
@@ -373,8 +403,35 @@ def tool_get_demographics(start_date: str, end_date: str) -> dict:
     age_counts = active_users["연령대"].value_counts()
     order = ["10대", "20대", "30대", "40대", "50대", "60대 이상"]
     age_result = [{"연령대": k, "고객수": int(age_counts.get(k, 0))} for k in order if k in age_counts.index]
+    age_result.sort(key=lambda r: r["고객수"], reverse=True)  # _annotate_rank_deviation은 1위가 맨 앞이라고 가정
 
-    return {"기간": f"{start_date} ~ {end_date}", "성별_분포": gender_result, "연령대_분포": age_result}
+    return {
+        "기간": f"{start_date} ~ {end_date}",
+        "성별_분포": _annotate_rank_deviation(gender_result, "고객수"),
+        "연령대_분포": _annotate_rank_deviation(age_result, "고객수"),
+    }
+
+
+CAMPAIGN_CHANNELS = ["카카오톡", "SMS", "이메일", "웹푸시"]
+
+
+def tool_propose_campaign(segment: str, channel: str, message: str) -> dict:
+    """캠페인 제안 카드를 만든다. 대상 인원수는 모델이 지어내지 않고 항상
+    get_persona_counts와 같은 실제 데이터에서 가져온다 — message(캠페인 문구)만 모델이
+    직접 작성한 창작 콘텐츠이고, 숫자(대상 인원)는 이 함수가 코드로 채운다."""
+    counts = tool_get_persona_counts()["페르소나별_고객_수"]
+    audience = next((c["고객수"] for c in counts if c["페르소나"] == segment), None)
+    return {
+        "세그먼트": segment,
+        "대상_인원": audience,
+        "채널": channel if channel in CAMPAIGN_CHANNELS else CAMPAIGN_CHANNELS[0],
+        "메시지": message,
+        "안내": (
+            "이 인원수는 실제 페르소나 분류 기준이며, 실행 전 화면에서 문구를 수정할 수 있습니다."
+            if audience is not None
+            else "일치하는 페르소나를 찾지 못해 대상 인원을 확인할 수 없습니다 — 정확한 페르소나 이름으로 다시 요청해주세요."
+        ),
+    }
 
 
 def recommend_segment(start_date, end_date, users: pd.DataFrame, orders: pd.DataFrame, events: pd.DataFrame) -> str:
@@ -600,6 +657,28 @@ CHATBOT_TOOLS = [
             "required": ["start_date", "end_date"],
         },
     },
+    {
+        "name": "propose_campaign",
+        "description": "캠페인 제안 카드를 만듭니다. '~한테 캠페인 만들어줘', '~세그먼트한테 메시지 보내줘' 같은 요청에 사용하세요. 화면에 제안 카드(수정 가능한 문구 + 실행 버튼)가 표시되고, 실제 기록은 사용자가 버튼을 눌러야(또는 완전 자동 모드면 곧바로) 남습니다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "segment": {
+                    "type": "string",
+                    "description": "대상 페르소나. 반드시 다음 중 하나 그대로: 신규 탐색자, 충동 구매자, 할인 헌터, 브랜드 충성 고객, 이탈 위험 고객, 휴면 고객",
+                },
+                "channel": {
+                    "type": "string",
+                    "description": "발송 채널. 다음 중 하나: 카카오톡, SMS, 이메일, 웹푸시. 사용자가 명시하지 않으면 카카오톡을 기본값으로 쓰세요.",
+                },
+                "message": {
+                    "type": "string",
+                    "description": "그 세그먼트 특성에 맞게 직접 작성한 짧고 매력적인 캠페인 메시지 문구 (이 도구는 문구를 대신 써주지 않습니다 — 모델이 직접 작성해서 넣어야 합니다)",
+                },
+            },
+            "required": ["segment", "channel", "message"],
+        },
+    },
 ]
 
 TOOL_FUNCTIONS = {
@@ -615,6 +694,7 @@ TOOL_FUNCTIONS = {
     "get_purchase_funnel": tool_get_purchase_funnel,
     "get_rfm_summary": tool_get_rfm_summary,
     "get_demographics": tool_get_demographics,
+    "propose_campaign": tool_propose_campaign,
 }
 
 # 답변에 "출처 태그"/"생각 과정"을 보여줄 때 쓰는 사람이 읽기 좋은 라벨.
@@ -633,6 +713,7 @@ TOOL_LABELS = {
     "get_purchase_funnel": {"label": "구매 퍼널 조회", "chart_key": "funnel"},
     "get_rfm_summary": {"label": "RFM 세그먼트별 요약 조회", "chart_key": "rfm"},
     "get_demographics": {"label": "성별·연령대 분포 조회", "chart_key": "demographics"},
+    "propose_campaign": {"label": "캠페인 제안 생성", "chart_key": "persona"},
 }
 
 
@@ -717,10 +798,34 @@ def _build_system_prompt() -> str:
    → 도구를 호출하지 말고, "죄송해요, 이 챗봇은 {company} 매장 데이터 관련 질문만 답할
    수 있어요."라고 정중히 안내하세요.
 
+5. 캠페인 제안형 (예: "이탈 위험 고객한테 캠페인 만들어줘", "휴면 고객 리텐션 메시지 짜줘")
+   → propose_campaign 도구를 호출하세요. segment는 반드시 실제 페르소나 라벨(신규
+   탐색자/충동 구매자/할인 헌터/브랜드 충성 고객/이탈 위험 고객/휴면 고객) 중 하나
+   그대로 쓰고, message는 그 세그먼트 특성에 맞는 문구를 직접 작성하세요(문구 자체는
+   도구가 대신 써주지 않습니다). 도구가 반환한 대상 인원 수는 실제 데이터 기준이니 그대로
+   인용하고 스스로 다른 숫자를 지어내지 마세요. 도구 호출 후 답변 본문은 "아래 제안을
+   확인하고 필요하면 문구를 수정한 다음 실행해 주세요." 처럼 짧게만 덧붙이세요 — 화면에
+   수정 가능한 카드와 실행 버튼이 자동으로 함께 표시되니 메시지 내용을 본문에 다시
+   옮겨 적지 마세요.
+
 규칙:
 - 답변은 한국어 존댓말(합니다체)로, 2~4문장 정도로 간결하게 작성하세요.
 - 핵심 수치는 **마크다운 볼드체**로 강조하세요.
 - 도구 호출 결과에 없는 정보는 추측하지 마세요.
+- 숫자를 말할 때는 반드시 비교 기준과 함께 말하세요 (예: "이전 기간 대비", "다른
+  세그먼트 평균 대비", "1위 대비"). "전환율이 낮아요"처럼 비교 기준 없이 숫자만
+  던지는 문장은 쓰지 마세요. 도구가 반환한 값에 이미 "평균_대비_배율",
+  "1위와의_격차_퍼센트", "전월_대비_증감률_퍼센트" 같은 비교 값이 들어있으면 그
+  값을 그대로 인용하고, 스스로 다시 나누거나 빼서 계산하지 마세요.
+- 원인을 추측할 때 "1) ... 2) ... 3) ..." 처럼 여러 가능성을 나열하며 헤징하지
+  마세요. 도구가 반환한 값 중 가장 근거가 뚜렷한 원인 하나를 골라 단정적으로 말하고,
+  그 근거가 된 지표를 함께 밝히세요.
+- 다음처럼 뻔하고 두루뭉술한 문구는 절대 쓰지 마세요: "다양한 마케팅 전략을
+  고려해보세요", "지속적인 모니터링이 필요합니다", "고객과의 소통을 강화하세요",
+  "다각도로 분석이 필요합니다", "여러 요인이 복합적으로 작용한 것으로 보입니다".
+  이런 말 대신 구체적인 숫자·세그먼트·기간을 넣어서 말하세요.
+  나쁜 예: "다양한 전략을 고려해보세요."
+  좋은 예: "할인 쿠폰을 받은 고객의 재구매율이 그렇지 않은 고객보다 2.1배 높아요."
 - 사용자가 물어본 지표만 답하세요. 도구는 여러 지표를 한 번에 묶어서 반환하지만,
   사용자가 요청하지 않은 지표(예: "매출 얼마야?"라고 물었는데 함께 돌아온 전환율/
   이탈률/재구매율 같은 것)는 먼저 나서서 언급하지 마세요. 예를 들어 "이번 주 매출은?"
@@ -768,7 +873,11 @@ def run_chatbot_turn(messages: list) -> tuple[str, list]:
                 result = func(**block.input) if func else {"오류": f"알 수 없는 도구: {block.name}"}
             except Exception as e:
                 result = {"오류": str(e)}
-            tool_calls.append({"name": block.name, "input": block.input})
+            # result도 같이 들고 있는 이유: propose_campaign처럼 도구가 반환한 값(특히
+            # 코드로 계산한 대상 인원수) 그대로를 화면 카드에 써야 하는 경우가 있어서다.
+            # 그 값을 모델이 답변 텍스트에서 다시 옮겨 적은 걸 파싱하면 모델이 숫자를
+            # 살짝 바꿔 쓸 위험이 있으니, 항상 이 원본 result를 그대로 화면에 쓴다.
+            tool_calls.append({"name": block.name, "input": block.input, "result": result})
             tool_results.append(
                 {
                     "type": "tool_result",
@@ -925,6 +1034,16 @@ div[class*="st-key-click_"] div[class*="st-key-ask_"] button {
 div[class*="st-key-ai_chat_form"] button {
     white-space: nowrap; padding-left: 10px !important; padding-right: 10px !important;
 }
+
+/* 캠페인 제안 카드. 답변 본문과 구분되게 살짝 카드처럼 보이도록 테두리/배경을 준다. */
+div[class*="st-key-ai-campaign-"] {
+    border: 1px solid var(--athlepa-border); border-radius: 10px;
+    padding: 8px 12px 4px; margin: 6px 0 8px; background: var(--athlepa-secondary);
+}
+div[class*="st-key-ai-campaign-"] textarea { font-size: 12.5px !important; }
+div[class*="st-key-ai-campaign-"] [data-testid="stCaptionContainer"] p {
+    font-weight: 600 !important; color: var(--athlepa-primary-hover) !important;
+}
 </style>
 """
 
@@ -960,6 +1079,7 @@ def _ask_chatbot(question: str):
             answer, tool_calls = f"죄송해요, 답변 중 오류가 발생했어요 ({e}).", []
 
     thinking, sources, seen = [], [], set()
+    campaign_proposal = None
     for call in tool_calls:
         desc = _describe_tool_call(call["name"], call["input"])
         thinking.append(desc)
@@ -968,9 +1088,47 @@ def _ask_chatbot(question: str):
         if dedupe_key not in seen:
             seen.add(dedupe_key)
             sources.append({"label": desc, "chart_key": chart_key})
+        if call["name"] == "propose_campaign" and call.get("result"):
+            campaign_proposal = dict(call["result"])  # 마지막 제안만 카드로 남긴다
+
+    # "완전 자동 실행" 모드면 제안이 나오자마자 바로 기록까지 남긴다. "제안만" 모드면
+    # 카드만 보여주고, 실제 기록은 사용자가 화면에서 실행 버튼을 눌러야 남는다.
+    if campaign_proposal and st.session_state.get("ai_execution_mode") == EXECUTION_MODES[1]:
+        try:
+            _execute_campaign(campaign_proposal, campaign_proposal["메시지"], campaign_proposal["채널"])
+        except Exception as e:
+            campaign_proposal["execute_error"] = str(e)
 
     st.session_state.chat_messages.append({"role": "assistant", "content": answer})
-    st.session_state.chat_meta.append({"sources": sources, "thinking": thinking, "feedback": None})
+    st.session_state.chat_meta.append(
+        {"sources": sources, "thinking": thinking, "feedback": None, "campaign_proposal": campaign_proposal}
+    )
+
+
+def _execute_campaign(proposal: dict, message: str, channel: str):
+    """캠페인 제안을 '실행'한다 — 여기서 실행은 실제 발송(카카오톡/SMS/이메일 등)이
+    아니라, automation 탭·성과 대시보드가 보는 campaign_history 테이블(Supabase)에
+    기록을 남기는 것까지만 의미한다(팀 합의 사항). automation/email_sender.py의
+    save_history()를 그대로 재사용해서, 자동화 탭 발송 이력 화면에도 이 캠페인이 똑같이
+    "AI 챗봇 제안" 상태로 나타나게 한다 — 실제 발송 여부는 그 화면에서 담당자가 최종
+    결정한다. 이 파일에서 automation/ 폴더 파일을 직접 수정하지는 않는다(기존 함수를
+    가져다 쓰기만 함)."""
+    from automation.email_sender import save_history
+
+    campaign_id = save_history(
+        segment=proposal["세그먼트"],
+        copy=message,
+        count=proposal.get("대상_인원") or 0,
+        status="AI 챗봇 제안",
+        approval_mode=st.session_state.get("ai_execution_mode", EXECUTION_MODES[0]),
+    )
+    proposal["executed"] = True
+    # save_history()가 campaign_id를 만들어서 돌려주는 최신 버전인지 아닌지에 따라
+    # None이 올 수도 있다(automation/email_sender.py가 아직 구버전이면 반환값이 없음) —
+    # 그래도 기록 자체는 남았으니 화면에 "None"이라고 이상하게 보이지 않게 처리.
+    proposal["campaign_id"] = campaign_id or "(자동 생성 ID 없음 — CSV에는 기록됨)"
+    proposal["채널"] = channel
+    proposal["메시지"] = message
 
 
 def _jump_to_chart(chart_key: str, label: str = ""):
@@ -1003,6 +1161,33 @@ def _render_feedback(idx: int, meta: dict):
                 st.rerun()
 
 
+def _render_campaign_proposal(idx: int, proposal: dict):
+    """캠페인 제안 카드 — 세그먼트/대상 인원은 읽기 전용(코드가 계산한 값), 채널·문구는
+    실행 전에 수정할 수 있다. '실행'을 누르기 전까지는 아무 것도 기록되지 않는다."""
+    with st.container(key=f"ai-campaign-{idx}"):
+        audience = proposal.get("대상_인원")
+        st.caption(f"📣 캠페인 제안 · {proposal['세그먼트']}" + (f" · 대상 약 {audience:,}명" if audience is not None else ""))
+
+        if proposal.get("executed"):
+            st.success(f"✅ 실행 완료 — 발송 이력에 기록했어요 (캠페인 ID: {proposal.get('campaign_id', '-')})")
+            return
+
+        if proposal.get("execute_error"):
+            st.error(f"실행 중 문제가 생겼어요: {proposal['execute_error']}")
+
+        channel_options = CAMPAIGN_CHANNELS
+        default_channel = proposal.get("채널") if proposal.get("채널") in channel_options else channel_options[0]
+        channel = st.selectbox("채널", channel_options, key=f"campaign_channel_{idx}", index=channel_options.index(default_channel))
+        message = st.text_area("메시지 (수정 가능)", value=proposal.get("메시지", ""), key=f"campaign_msg_{idx}", height=100)
+
+        if st.button("🚀 실행 (발송 이력에 기록)", key=f"campaign_exec_{idx}"):
+            try:
+                _execute_campaign(proposal, message, channel)
+            except Exception as e:
+                proposal["execute_error"] = str(e)
+            st.rerun()
+
+
 def _render_message(idx: int, msg: dict, meta: dict, is_last: bool = False):
     with st.chat_message(msg["role"]):
         if msg["role"] != "assistant":
@@ -1020,6 +1205,10 @@ def _render_message(idx: int, msg: dict, meta: dict, is_last: bool = False):
                     st.caption(f"· {step}")
 
         render_chat_text(msg["content"])
+
+        proposal = meta.get("campaign_proposal")
+        if proposal:
+            _render_campaign_proposal(idx, proposal)
 
         sources = meta.get("sources") or []
         if sources:
@@ -1128,8 +1317,11 @@ def render_floating_chat(force_open_once: bool = False):
                 )
                 st.session_state["ai_execution_mode"] = chosen_mode
                 st.caption(
-                    "지금은 챗봇이 데이터를 '조회'만 하고 있어서 실제로 실행되는 액션은 "
-                    "아직 없어요. 나중에 자동화 기능이 연결되면 이 설정을 따르게 됩니다."
+                    "'제안만'을 고르면 캠페인 제안 카드에서 문구를 확인·수정한 뒤 실행 "
+                    "버튼을 눌러야 발송 이력에 기록되고, '완전 자동 실행'을 고르면 제안이 "
+                    "나오자마자 자동으로 기록돼요. 여기서 '실행'은 실제 발송이 아니라 "
+                    "발송 이력에 기록을 남기는 것까지예요 — 실제 발송 여부는 자동화 탭에서 "
+                    "따로 결정해요."
                 )
 
             if not st.session_state.chat_messages:
