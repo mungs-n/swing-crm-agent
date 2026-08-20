@@ -801,11 +801,56 @@ div[class*="st-key-ai-src-"] button:hover:not(:disabled) {
     border-color: var(--athlepa-primary) !important; background: var(--athlepa-secondary) !important;
 }
 
+/* 👍/👎 버튼: 이모지가 배경(원형) 정중앙에 오도록 폭/높이를 같게 고정하고 flex로
+   가운데 정렬한다. Streamlit이 버튼 라벨을 <p> 태그로 감싸면서 기본 margin이 붙어
+   이모지가 배경 밖으로 살짝 밀려 보이던 문제라, p 태그의 margin/line-height도 같이
+   0으로 맞춰준다. type="primary"(눌린 상태)일 때 배경색이 사각형으로 보이던 것도
+   border-radius를 100%로 강제해서 항상 동그랗게 나오게 했다. */
 div[class*="st-key-ai-fb-"] button {
-    padding: 2px 6px !important; font-size: 12px !important; height: auto !important;
-    min-height: 0 !important; border: none !important; opacity: 0.55;
+    padding: 0 !important; font-size: 13px !important; width: 26px !important; height: 26px !important;
+    min-height: 0 !important; min-width: 0 !important; border: none !important; opacity: 0.55;
+    border-radius: 50% !important; display: flex !important; align-items: center !important;
+    justify-content: center !important; line-height: 1 !important;
+}
+div[class*="st-key-ai-fb-"] button p {
+    margin: 0 !important; line-height: 1 !important; display: flex !important; align-items: center !important;
 }
 div[class*="st-key-ai-fb-"] button:hover { opacity: 1; }
+
+/* 차트/카드 전체를 클릭하면 AI 챗봇이 분석해주는 기능용 스타일. dashboard/charts.py
+   쪽에서 st.container(key="click_xxx")로 차트를 감싸고, 그 안에 st.button(key="ask_xxx")
+   (버튼 key는 "ask_"로 시작해야 함)로 ask_chatbot()을 부르면, 이 스타일이 버튼을
+   투명하게 만들어서 카드 전체를 덮어씌운다 — 버튼 자체를 누르는 게 아니라 카드
+   아무 곳이나 눌러도 되는 것처럼 보이게 하는 트릭이다.
+
+   Streamlit은 위젯마다 자동으로 "st-key-<위젯키>"라는 래퍼 div를 만드는데, 이 래퍼가
+   자체적으로 position:relative를 갖고 있어서, 버튼만 position:absolute로 늘려도
+   "카드 전체" 기준이 아니라 "이 래퍼 자신" 기준으로 늘어나 버린다(래퍼 자신은 버튼
+   크기만큼만 좁게 차지하므로 결국 아주 작은 영역만 늘어나는 것처럼 보임). 그래서
+   래퍼(div[class*="st-key-ask_"])까지 같이 카드 전체 크기로 늘려줘야 실제로 카드
+   전체가 클릭 가능해진다. */
+div[class*="st-key-click_"] {
+    position: relative; cursor: pointer;
+    transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+}
+div[class*="st-key-click_"]:hover {
+    border-color: var(--athlepa-primary);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 20px rgba(124,58,237,0.12);
+}
+div[class*="st-key-click_"] div[class*="st-key-ask_"] {
+    position: absolute !important; inset: 0 !important; width: 100% !important; height: 100% !important;
+    margin: 0 !important; padding: 0 !important;
+}
+div[class*="st-key-click_"] div[class*="st-key-ask_"] div.stButton {
+    position: absolute !important; inset: 0 !important; width: 100% !important; height: 100% !important;
+    margin: 0 !important; padding: 0 !important;
+}
+div[class*="st-key-click_"] div[class*="st-key-ask_"] button {
+    position: absolute !important; inset: 0 !important; width: 100% !important; height: 100% !important;
+    opacity: 0 !important; z-index: 5 !important; border: none !important; cursor: pointer !important;
+    padding: 0 !important; margin: 0 !important; min-width: 0 !important; max-width: none !important;
+}
 
 div[class*="st-key-ai_chat_form"] button {
     white-space: nowrap; padding-left: 10px !important; padding-right: 10px !important;
