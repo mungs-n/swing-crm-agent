@@ -93,7 +93,7 @@ def save_history(segment, copy, count, status, approval_mode="자동실행", cam
         "세그먼트": segment,
         "대상 인원": count,
         # 예전엔 여기서 copy[:50] + "..." 로 잘라서 저장했는데, 그러면 나중에
-        # "캠페인 이름 클릭 → 상세 내용 보기" 같은 걸 할 때 원본 내용이 없어서
+        # "캠페인 이름 클릭 -> 상세 내용 보기" 같은 걸 할 때 원본 내용이 없어서
         # 다시 보여줄 수가 없었다. 목록 화면에서 길게 보이는 건 CSS로 줄여서
         # 표시하면 되니, 저장은 항상 전체 내용으로 한다.
         "메시지 요약": message_summary,
@@ -414,7 +414,6 @@ def _start_scheduler():
         st.warning(
             "반복 발송 기능을 쓰려면 APScheduler 패키지가 필요해요. "
             "터미널에서 `pip install apscheduler` 실행 후 앱을 다시 시작해주세요.",
-            icon="⚠️",
         )
         return None
 
@@ -442,7 +441,7 @@ def render_recurring_campaigns_panel() -> None:
     """지금 돌고 있는 반복 캠페인을 보여주고, 일시정지/재개/삭제할 수 있게 한다."""
     df = load_recurring_campaigns()
 
-    with st.expander("🔁 반복 발송 관리", expanded=False):
+    with st.expander("반복 발송 관리", expanded=False):
         if df.empty:
             st.caption("등록된 반복 캠페인이 없습니다.")
             return
@@ -455,7 +454,8 @@ def render_recurring_campaigns_panel() -> None:
                 weekday_str = " · " + ", ".join(WEEKDAY_LABELS[i] for i in idxs)
 
             active = bool(row["active"])
-            status_label = "🟢 진행 중" if active else "⏸️ 일시정지"
+            dot_color = "#22C55E" if active else "#9CA3AF"
+            status_label = "진행 중" if active else "일시정지"
 
             c1, c2, c3, c4 = st.columns([3, 2, 1, 1])
             with c1:
@@ -465,7 +465,12 @@ def render_recurring_campaigns_panel() -> None:
                     f"다음 발송: {row['next_run']} · 누적 {int(row['send_count'] or 0)}회"
                 )
             with c2:
-                st.caption(status_label)
+                st.markdown(
+                    f"<span style='display:inline-block;width:7px;height:7px;border-radius:50%;"
+                    f"background:{dot_color};margin-right:6px;'></span>"
+                    f"<span style='font-size:0.85rem;color:#374151;'>{status_label}</span>",
+                    unsafe_allow_html=True,
+                )
             with c3:
                 toggle_label = "일시정지" if active else "재개"
                 if st.button(toggle_label, key=f"toggle_{row['id']}", use_container_width=True):
