@@ -753,6 +753,21 @@ def _render_message(idx: int, msg: dict, meta: dict):
         _render_feedback(idx, meta)
 
 
+def ask_chatbot(question: str):
+    """다른 페이지(예: dashboard/charts.py)에서 차트나 지표 카드를 클릭했을 때 호출하는
+    함수. 챗봇 패널이 자동으로 열리고, 그 질문을 바로 물어본 것처럼 답변까지 나온다.
+
+    사용법: 클릭 이벤트가 일어나는 곳(예: st.button 안)에서
+        from ai_insights.chatbot import ask_chatbot
+        ask_chatbot("세그먼트별 매출을 분석해줘")
+    이렇게 딱 한 줄만 호출하면 된다 — 별도로 rerun을 부르거나 패널을 열 필요 없음.
+    (내부적으로 예시 질문 버튼과 똑같은 방식(session_state의 pending_question)을 쓰기
+    때문에, 그 값이 세팅된 채로 다음에 render_floating_chat()이 그려질 때 자동으로
+    처리된다 — Home.py는 pg.run() 다음에 항상 render_floating_chat()을 부르므로,
+    같은 스크립트 실행 안에서 바로 반영된다.)"""
+    st.session_state["pending_question"] = question
+
+
 def render_status_badge():
     """'AI 어시스턴트 온라인' 상태 배지 - 페이지 제목 옆에 나란히 배치."""
     st.markdown(
