@@ -132,8 +132,9 @@ def compute_kpis(cur_orders, cur_events, prev_orders, prev_events):
     }
 
 
-def _kpi_card(label, value_text, delta, unit="%", key=None):
-    """전월대비 배지가 포함된 텍스트형 KPI 카드"""
+def _kpi_card(label, value_text, delta, unit="%", key=None, ask_question=None):
+    """전월대비 배지가 포함된 텍스트형 KPI 카드. ask_question을 주면 카드 안에
+    'AI 분석하기' 버튼이 같이 뜨고, 누르면 플로팅 챗봇이 열리면서 그 질문으로 바로 분석해준다."""
     if delta > 0:
         cls, arrow = "trend-up", "▲"
     elif delta < 0:
@@ -148,6 +149,9 @@ def _kpi_card(label, value_text, delta, unit="%", key=None):
             f"<div class='stat-sub'>이전 기간 대비</div>",
             unsafe_allow_html=True,
         )
+        if ask_question and st.button("🤖 이 지표 분석하기", key=f"{key}-ask", use_container_width=True):
+            from ai_insights.chatbot import ask_chatbot
+            ask_chatbot(ask_question)
 
 
 def render_kpi_cards(orders, events, prev_orders, prev_events):
@@ -157,13 +161,13 @@ def render_kpi_cards(orders, events, prev_orders, prev_events):
     row = st.columns(3)
     with row[0]:
         v, d = kpi["gmv"]
-        _kpi_card("GMV", fmt_amount(v), d, key="card-kpi-gmv")
+        _kpi_card("GMV", fmt_amount(v), d, key="card-kpi-gmv", ask_question="GMV 변화 원인을 분석해줘")
     with row[1]:
         v, d = kpi["aov"]
-        _kpi_card("AOV", fmt_amount(v, scaled=False), d, key="card-kpi-aov")
+        _kpi_card("AOV", fmt_amount(v, scaled=False), d, key="card-kpi-aov", ask_question="평균 주문 금액(AOV) 변화를 분석해줘")
     with row[2]:
         v, d = kpi["conversion"]
-        _kpi_card("구매 전환율", f"{v:.1f}%", d, unit="%p", key="card-kpi-conv")
+        _kpi_card("구매 전환율", f"{v:.1f}%", d, unit="%p", key="card-kpi-conv", ask_question="구매 전환율 변화 원인을 분석해줘")
 
 
 def render_gmv_chart(orders, granularity="월별"):
@@ -260,8 +264,9 @@ def _data_view_button(data, label="원본 데이터 보기"):
             st.dataframe(_mask_sensitive(data), width=850, hide_index=True)
 
 
-def _render_ranked_bars(title, series, colors=None, value_fmt=None, icon=None):
-    """랭킹형 가로 막대 리스트 (라벨-막대-값 순, 값 큰 순 정렬). colors 미지정 시 1위만 강조색"""
+def _render_ranked_bars(title, series, colors=None, value_fmt=None, icon=None, ask_question=None):
+    """랭킹형 가로 막대 리스트 (라벨-막대-값 순, 값 큰 순 정렬). colors 미지정 시 1위만 강조색.
+    ask_question을 주면 차트 밑에 'AI 분석하기' 버튼이 같이 뜬다."""
     st.markdown(
         f"<div style='display:flex;align-items:center;gap:8px;margin-bottom:4px'>{icon or ''}"
         f"<span style='font-size:0.85rem;font-weight:600'>{title}</span></div>",
@@ -302,6 +307,10 @@ def _render_ranked_bars(title, series, colors=None, value_fmt=None, icon=None):
         plot_bgcolor="rgba(0,0,0,0)",
     )
     st.plotly_chart(fig, width='stretch')
+
+    if ask_question and st.button("🤖 이 차트 분석하기", key=f"ask-{title}", use_container_width=True):
+        from ai_insights.chatbot import ask_chatbot
+        ask_chatbot(ask_question)
 
 
 def render_gender_split(users):
@@ -365,7 +374,7 @@ def render_persona_ranking(users):
     """페르소나별 고객 수 랭킹"""
     counts = users["persona_type"].value_counts()
     counts.index = counts.index.map(PERSONA_KR)
-    _render_ranked_bars("페르소나별 고객 수", counts, value_fmt=lambda v: f"{v:,.0f}명")
+    _render_ranked_bars("페르소나별 고객 수", counts, value_fmt=lambda v: f"{v:,.0f}명", ask_question="페르소나별 고객 수를 분석해줘")
 
 
 def render_customer_profile(users, events):
@@ -423,18 +432,18 @@ def render_activity_kpis(events):
     )
     row = st.columns(3)
     with row[0]:
-        _kpi_card("DAU (일간)", f"{dau:,}명", _pct_delta(dau, dau_prev), key="card-dau")
+        _kpi_card("DAU (일간)", f"{dau:,}명", _pct_delta(dau, dau_prev), key="card-dau", ask_question="오늘 하루 활성 고객 수를 분석해줘")
     with row[1]:
-        _kpi_card("WAU (주간)", f"{wau:,}명", _pct_delta(wau, wau_prev), key="card-wau")
+        _kpi_card("WAU (주간)", f"{wau:,}명", _pct_delta(wau, wau_prev), key="card-wau", ask_question="최근 7일 활성 고객 수를 분석해줘")
     with row[2]:
-        _kpi_card("MAU (월간)", f"{mau:,}명", _pct_delta(mau, mau_prev), key="card-mau")
+        _kpi_card("MAU (월간)", f"{mau:,}명", _pct_delta(mau, mau_prev), key="card-mau", ask_question="최근 30일 활성 고객 수를 분석해줘")
 
 
 def render_segment_ranking(orders):
     """세그먼트별 매출 기여도 랭킹 (VIP / 충성 / 이탈위험 / 휴면)"""
     rfm = assign_segment(calculate_rfm(orders.copy()))
     gmv_by_segment = rfm.groupby("segment")["Monetary"].sum().reindex(SEGMENT_ORDER).fillna(0)
-    _render_ranked_bars("세그먼트별 매출", gmv_by_segment, colors=SEGMENT_COLORS)
+    _render_ranked_bars("세그먼트별 매출", gmv_by_segment, colors=SEGMENT_COLORS, ask_question="세그먼트별 매출을 분석해줘")
 
 
 def render_category_ranking(orders):
@@ -470,13 +479,17 @@ def render_category_ranking(orders):
     )
     st.plotly_chart(fig, width='stretch')
 
+    if st.button("🤖 이 차트 분석하기", key="ask-카테고리별 매출", use_container_width=True):
+        from ai_insights.chatbot import ask_chatbot
+        ask_chatbot("카테고리별 매출을 분석해줘")
+
 
 def render_channel_ranking(users, orders):
     """유입 채널별 매출 랭킹"""
     merged = orders.merge(users[["user_id", "acquisition_channel"]], on="user_id")
     gmv_by_channel = merged.groupby("acquisition_channel")["total_amount"].sum()
     gmv_by_channel.index = gmv_by_channel.index.map(CHANNEL_KR)
-    _render_ranked_bars("유입 채널별 매출", gmv_by_channel)
+    _render_ranked_bars("유입 채널별 매출", gmv_by_channel, ask_question="채널별 매출을 분석해줘")
 
 
 def render_rfm_scatter(orders):
@@ -732,6 +745,10 @@ def render_cohort(users, orders_full, start, end):
         "<span style='font-size:11px;color:var(--athlepa-muted-text)'>높음</span></div>",
         unsafe_allow_html=True,
     )
+
+    if st.button("🤖 이 차트 분석하기", key="ask-재구매 유지율", use_container_width=True):
+        from ai_insights.chatbot import ask_chatbot
+        ask_chatbot("재구매 유지율을 분석해줘")
 
 
 DATE_PRESETS = {

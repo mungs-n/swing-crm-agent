@@ -671,6 +671,16 @@ def _init_chat_state():
     st.session_state.setdefault("ai_execution_mode", EXECUTION_MODES[0])
 
 
+def ask_chatbot(question: str):
+    """대시보드 등 다른 페이지의 'AI 분석하기' 버튼에서 호출한다. 플로팅 챗봇 패널을
+    열고 이 질문을 예약해두면, render_floating_chat()이 다음 렌더링에서 실제 답변까지
+    받아온다 (직접 여기서 API를 호출하지 않는 이유: 플로팅 패널은 Home.py의 최상위
+    스크립트에서만 렌더링되므로, 다른 페이지 스크립트 안에서 곧바로 메시지를 그릴 수 없다)."""
+    st.session_state["pending_question"] = question
+    st.session_state["chat_panel_open"] = True
+    st.rerun()
+
+
 def _ask_chatbot(question: str):
     """사용자 질문 1건을 대화 이력에 추가하고, 챗봇 답변까지 받아서 메타데이터(출처/생각
     과정)와 함께 기록한다.
