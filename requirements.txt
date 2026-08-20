@@ -7,3 +7,5 @@ sendgrid
 python-dotenv
 supabase
 bcrypt
+apscheduler
+firebase-admin
