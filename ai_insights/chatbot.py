@@ -636,6 +636,24 @@ TOOL_LABELS = {
 }
 
 
+# 답변에 쓰인 차트(chart_key)에 따라 자연스럽게 이어질 만한 후속 질문 후보.
+# 프로토타입의 "차트별 퀵리플라이"를 재현한 것 — 어떤 차트를 클릭해서 나온 답변이든,
+# 답변 하단에 그 차트와 관련된 다음 질문을 칩으로 보여줘서 매번 직접 타이핑하지
+# 않아도 되게 한다. 방금 물어본 것과 겹치는 칩은 아래 렌더링 쪽에서 걸러낸다.
+QUICK_REPLIES = {
+    "gmv": ["카테고리별로는 어때?", "채널별로는 어때?"],
+    "gmv_trend": ["어느 달이 제일 좋았어?", "이번 달 추세는 어때?"],
+    "category": ["채널별 매출은 어때?", "세그먼트별로는 어때?"],
+    "channel": ["카테고리별 매출은 어때?", "가장 효율 좋은 채널은 어디야?"],
+    "segment": ["페르소나별 고객 수는 어때?", "휴면 고객 비중은 얼마나 돼?"],
+    "persona": ["이탈 위험 고객엔 어떤 액션이 좋을까?", "휴면 고객은 몇 명이야?"],
+    "cohort": ["재구매율은 얼마나 돼?", "전환율을 어떻게 올리면 좋을까?"],
+    "funnel": ["장바구니 이탈률은 얼마야?", "전환율을 어떻게 올리면 좋을까?"],
+    "rfm": ["세그먼트별 매출은 어때?", "충성 고객은 몇 명이야?"],
+    "demographics": ["연령대별로 매출 차이가 있어?", "주 구매 채널은 어디야?"],
+}
+
+
 def _describe_tool_call(name: str, tool_input: dict) -> str:
     """도구 호출 1건을 사람이 읽을 수 있는 한 줄로 요약한다 (생각 과정 / 출처 표시용)."""
     info = TOOL_LABELS.get(name, {"label": name})
@@ -670,18 +688,25 @@ def _build_system_prompt() -> str:
    반환한 숫자를 다시 나누거나 곱해서 새로운 비율을 스스로 만들어내지도 마세요.
    "저번주보다", "지난달 대비" 처럼 두 기간을 비교하는 질문이면 get_kpi_summary를
    두 번 부르지 말고 반드시 get_kpi_comparison을 사용해서 증감률까지 받아오세요.
+   순위/분포 목록(카테고리별·채널별·세그먼트별·페르소나별·성별·연령대별 매출 등)을
+   반환하는 도구를 썼다면, 반환된 항목을 전체 다 읽어주지 마세요 — 그 목록은 이미
+   화면 차트에 그대로 나와 있어서, 챗봇이 다시 나열하기만 하면 굳이 물어본 의미가
+   없습니다. 대신 1위와 2위의 격차, 눈에 띄게 쏠린 부분, 또는 그로부터 나오는 시사점
+   위주로 2~3문장 안에 답하세요(예: "SNS가 1위지만 검색광고와 차이가 크지 않아요"처럼
+   숫자 자체보다 숫자 사이의 관계를 짚어주세요). 사용자가 "표로 보여줘", "순서대로 다
+   알려줘"처럼 전체 목록을 명시적으로 요청했을 때만 예외적으로 항목을 다 나열하세요.
 
 2. 진단/분석형 (예: "왜 그래?", "무슨 문제야?", "지금 가장 시급한 문제는?")
-   → 단순 수치가 아니라 원인과 다음 행동까지 묻는 질문입니다. 반드시 아래 4단계 구조를
+   → 단순 수치가 아니라 원인과 다음 행동까지 묻는 질문입니다. 반드시 아래 3단계 구조를
    그대로 사용해서 답하세요 (각 단계를 굵게 표시된 소제목으로 구분):
    **결과:** 무엇이 어떻게 됐는지 핵심 수치로 1문장.
    **원인:** 그 결과가 왜 나왔는지, 도구가 반환한 값(예: 페르소나 분포, 채널별 매출 등)에
      근거해서 1~2문장. 도구 결과로 확인되지 않는 원인은 추측이라는 걸 밝히세요.
-   **근거:** 이 진단에 사용한 지표 이름·기간·계산 기준을 짧게 명시하세요 (예: "2026-06-01~
-     2026-06-07 기간의 RFM 세그먼트별 매출 기준"). 사용자가 원본 데이터를 확인하고
-     싶어할 수 있다는 걸 염두에 두고 구체적으로 쓰세요.
    **추천 액션:** 다음에 뭘 하면 좋을지 1문장. 이 액션은 검증된 사실이 아니라 제안이라는
      점을 문장 안에서 자연스럽게 드러내세요.
+   (이 진단에 실제로 쓰인 지표·기간은 답변 하단에 클릭 가능한 "출처" 태그로 화면에
+   자동으로 따로 표시되니, 본문 안에서 "근거:" 같은 문장으로 다시 반복해서 설명하지
+   마세요 — 같은 내용이 두 번 보이면 오히려 헷갈립니다.)
 
 3. 전략/의견형 (예: "전환율을 어떻게 올려야 할까?", "뭐가 더 필요할까?")
    → 도구만으로는 답할 수 없는 질문입니다. 답변은 하되, 답변 맨 앞에 반드시
@@ -824,6 +849,28 @@ div[class*="st-key-ai-src-"] button:hover:not(:disabled) {
     border-color: var(--athlepa-primary) !important; background: var(--athlepa-secondary) !important;
 }
 
+/* "이어서 물어보기" 퀵리플라이 칩. 출처 태그(흰 배경, 정보 확인용)와 헷갈리지 않도록
+   보라색 계열로 채워서 "누르면 다음 액션(질문)이 일어난다"는 걸 시각적으로 구분했다. */
+div[class*="st-key-ai-quick-"] { margin-top: 4px; }
+div[class*="st-key-ai-quick-"] p {
+    font-size: 10.5px !important; color: var(--athlepa-muted-text) !important; margin: 0 0 4px !important;
+}
+div[class*="st-key-ai-quick-"] button {
+    font-size: 11.5px !important; padding: 3px 12px !important; height: auto !important;
+    min-height: 0 !important; border-radius: 999px !important; border: 1px solid transparent !important;
+    background: var(--athlepa-secondary) !important; color: var(--athlepa-primary-hover) !important;
+    margin: 0 4px 4px 0 !important; font-weight: 500 !important;
+}
+/* 위의 일반 "p" 규칙(캡션용)이 버튼 라벨을 감싼 <p>까지 덮어써서 버튼 글씨가 회색으로
+   보이던 문제 — 선택자에 button을 한 겹 더 넣어 더 구체적으로 만들어서(우선순위로 이김)
+   버튼 안 글씨는 버튼 자체의 color(보라색)를 그대로 물려받게 강제한다. */
+div[class*="st-key-ai-quick-"] button p {
+    color: inherit !important; font-size: 11.5px !important; margin: 0 !important;
+}
+div[class*="st-key-ai-quick-"] button:hover {
+    background: var(--athlepa-primary) !important; color: #fff !important;
+}
+
 /* 👍/👎 버튼: 이모지가 배경(원형) 정중앙에 오도록 폭/높이를 같게 고정하고 flex로
    가운데 정렬한다. Streamlit이 버튼 라벨을 <p> 태그로 감싸면서 기본 margin이 붙어
    이모지가 배경 밖으로 살짝 밀려 보이던 문제라, p 태그의 margin/line-height도 같이
@@ -956,14 +1003,18 @@ def _render_feedback(idx: int, meta: dict):
                 st.rerun()
 
 
-def _render_message(idx: int, msg: dict, meta: dict):
+def _render_message(idx: int, msg: dict, meta: dict, is_last: bool = False):
     with st.chat_message(msg["role"]):
         if msg["role"] != "assistant":
             st.markdown(msg["content"])
             return
 
+        # "생각 과정"과 "출처 태그"가 똑같은 라벨(도구명+기간)을 두 번 보여주는 중복이
+        # 있었다 — 도구를 1번만 호출한(가장 흔한) 경우엔 출처 태그 하나로 이미 충분하므로
+        # 생각 과정 expander를 아예 숨기고, 도구를 여러 번 호출했을 때만(비교 질문처럼
+        # 출처 태그만으로는 안 보이는 호출 순서가 있을 때) 펼쳐서 볼 수 있게 남겨둔다.
         thinking = meta.get("thinking") or []
-        if thinking:
+        if len(thinking) > 1:
             with st.expander("🔍 생각 과정 보기", expanded=False):
                 for step in thinking:
                     st.caption(f"· {step}")
@@ -979,6 +1030,26 @@ def _render_message(idx: int, msg: dict, meta: dict):
                             _jump_to_chart(source["chart_key"], source["label"])
                     else:
                         st.button(f"출처: {source['label']}", key=f"src_{idx}_{s_i}", disabled=True)
+
+        # 가장 최근 답변에서만 후속 질문 칩을 보여준다 — 지난 대화 전체에 계속 붙어있으면
+        # 스크롤할수록 칩이 계속 쌓여서 지저분해진다. 방금 쓴 차트(chart_key) 기준으로
+        # 관련 질문을 뽑고, 방금 사용자가 이미 물어본 것과 겹치는 칩은 빼준다.
+        if is_last and sources:
+            asked = {m["content"] for m in st.session_state.chat_messages if m["role"] == "user"}
+            seen_keys, quick = set(), []
+            for source in sources:
+                for q in QUICK_REPLIES.get(source["chart_key"], []):
+                    if q not in seen_keys and q not in asked:
+                        seen_keys.add(q)
+                        quick.append(q)
+            quick = quick[:3]
+            if quick:
+                with st.container(key=f"ai-quick-{idx}"):
+                    st.caption("이어서 물어보기")
+                    for q_i, q in enumerate(quick):
+                        if st.button(q, key=f"quick_{idx}_{q_i}"):
+                            st.session_state["pending_question"] = q
+                            st.rerun()
 
         _render_feedback(idx, meta)
 
@@ -1073,8 +1144,9 @@ def render_floating_chat(force_open_once: bool = False):
                         if st.button(q, key=f"example_q_{i}", use_container_width=True):
                             pending_question = q
 
+            last_idx = len(st.session_state.chat_messages) - 1
             for idx, (msg, meta) in enumerate(zip(st.session_state.chat_messages, st.session_state.chat_meta)):
-                _render_message(idx, msg, meta)
+                _render_message(idx, msg, meta, is_last=(idx == last_idx))
 
             if pending_question:
                 _ask_chatbot(pending_question)
