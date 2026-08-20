@@ -7,8 +7,10 @@
 
 import streamlit as st
 import sendgrid
-from sendgrid.helpers.mail import CustomArg, Mail
+from sendgrid.helpers.mail import Attachment, ContentId, CustomArg, Disposition, FileContent, FileName, FileType, Mail
 import pandas as pd
+import base64
+import mimetypes
 import os
 import uuid
 from datetime import datetime, timedelta, time as dtime
@@ -90,7 +92,10 @@ def load_fcm_tokens() -> pd.DataFrame:
         return pd.DataFrame(columns=["token", "user_id", "등록일시"])
 
 
-def send_email(to_email, subject, body, send_at: int | None = None, send_id: str | None = None):
+def send_email(
+    to_email, subject, body, send_at: int | None = None, send_id: str | None = None,
+    image_bytes: bytes | None = None, image_name: str | None = None,
+):
     """SendGrid로 이메일을 보낸다. send_at(미래 시각의 unix timestamp)을 주면 지금 API를
     호출은 하지만, 실제 발송은 SendGrid가 그 시각에 알아서 처리한다 (예약 발송,
     SendGrid 자체 제약으로 최대 72시간 이내만 가능).
@@ -98,18 +103,36 @@ def send_email(to_email, subject, body, send_at: int | None = None, send_id: str
     send_id를 주면 custom_args로 실어 보내서, SendGrid Event Webhook이 오픈/클릭 이벤트에
     이 값을 그대로 실어 돌려준다 (ingestion_server의 /sendgrid-events가 이 값으로
     campaign_sends 테이블의 어느 행을 업데이트할지 찾는다). campaign_sends에 해당
-    send_id로 행을 미리 만들어두지 않으면 업데이트 대상이 없어 이벤트가 무시된다."""
+    send_id로 행을 미리 만들어두지 않으면 업데이트 대상이 없어 이벤트가 무시된다.
+
+    image_bytes를 주면 본문 이미지로 인라인 첨부한다. base64 데이터 URI로 직접
+    본문에 박아넣는 방식은 Gmail이 스팸/보안 이유로 대부분 걸러내서, SendGrid의
+    정식 인라인 첨부(Content-ID 참조) 방식을 쓴다 - 메일 클라이언트 대부분에서
+    안정적으로 보인다."""
+    html = body.replace("\n", "<br>")
+    if image_bytes:
+        html += '<br><img src="cid:ab_test_image" style="max-width:100%">'
+
     sg = sendgrid.SendGridAPIClient(api_key=os.environ.get("SENDGRID_API_KEY"))
     message = Mail(
         from_email=os.environ.get("FROM_EMAIL"),
         to_emails=to_email,
         subject=subject,
-        html_content=body.replace("\n", "<br>")
+        html_content=html,
     )
     if send_at is not None:
         message.send_at = send_at
     if send_id is not None:
         message.add_custom_arg(CustomArg("send_id", send_id))
+    if image_bytes:
+        mime_type = mimetypes.guess_type(image_name or "image.png")[0] or "image/png"
+        message.attachment = Attachment(
+            FileContent(base64.b64encode(image_bytes).decode()),
+            FileName(image_name or "image.png"),
+            FileType(mime_type),
+            Disposition("inline"),
+            ContentId("ab_test_image"),
+        )
     response = sg.send(message)
     return response.status_code
 
