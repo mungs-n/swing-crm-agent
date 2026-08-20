@@ -276,6 +276,107 @@ def tool_get_kpi_comparison(current_start: str, current_end: str, compare_start:
     }
 
 
+def tool_get_gmv_trend(start_date: str, end_date: str) -> dict:
+    """특정 기간을 월별로 나눠 GMV와 주문 수 추이를 반환한다. 'GMV 추이', '주문 수 추이',
+    '요즘 매출 흐름이 어때' 같은 질문에 사용한다."""
+    users, orders, events = load_data()
+    start, end = pd.Timestamp(start_date).date(), pd.Timestamp(end_date).date()
+    period_orders, _ = get_period_slices(users, orders, events, start, end)
+    if period_orders.empty:
+        return {"기간": f"{start_date} ~ {end_date}", "월별_추이": []}
+    monthly = period_orders.copy()
+    monthly["월"] = monthly["order_date"].dt.to_period("M").astype(str)
+    grouped = monthly.groupby("월").agg(GMV=("total_amount", "sum"), 주문_수=("order_id", "count")).reset_index()
+    return {
+        "기간": f"{start_date} ~ {end_date}",
+        "월별_추이": [
+            {"월": row["월"], "GMV": int(row["GMV"]), "주문_수": int(row["주문_수"])}
+            for _, row in grouped.iterrows()
+        ],
+    }
+
+
+def tool_get_purchase_funnel(start_date: str, end_date: str) -> dict:
+    """특정 기간의 구매 퍼널(방문 → 상품조회 → 장바구니 → 구매) 단계별 이벤트 수와 단계 간
+    전환율을 반환한다. '퍼널', '어디서 이탈이 많이 생겨' 같은 질문에 사용한다.
+
+    대시보드 차트와 같은 기준(고유 방문자 수가 아니라 이벤트 발생 건수)으로 맞춰야
+    챗봇 답변과 화면 숫자가 다르게 보이지 않는다 — 예: page_view 이벤트 총 건수를
+    '방문'으로 센다."""
+    users, orders, events = load_data()
+    start, end = pd.Timestamp(start_date).date(), pd.Timestamp(end_date).date()
+    _, period_events = get_period_slices(users, orders, events, start, end)
+
+    steps = [("방문", "page_view"), ("상품조회", "product_view"), ("장바구니", "add_to_cart"), ("구매", "purchase")]
+
+    funnel, prev_count = [], None
+    for label, event_type in steps:
+        count = int((period_events["event_type"] == event_type).sum())
+        rate = round(count / prev_count * 100, 1) if prev_count else 100.0
+        funnel.append({"단계": label, "이벤트_건수": count, "이전_단계_대비_전환율_퍼센트": rate})
+        prev_count = count
+
+    return {"기간": f"{start_date} ~ {end_date}", "구매_퍼널": funnel}
+
+
+def tool_get_rfm_summary(start_date: str, end_date: str) -> dict:
+    """특정 기간의 RFM(최근성/구매빈도/구매금액) 세그먼트별 평균값과 고객 수를 반환한다.
+    'RFM 분포가 어때', '충성 고객은 보통 얼마나 자주 사' 같은 질문에 사용한다. (개별
+    고객 산점도가 아니라 세그먼트별 요약 통계 — 도구는 근거로 인용 가능한 값만 준다.)"""
+    users, orders, events = load_data()
+    start, end = pd.Timestamp(start_date).date(), pd.Timestamp(end_date).date()
+    period_orders, _ = get_period_slices(users, orders, events, start, end)
+    if period_orders.empty:
+        return {"기간": f"{start_date} ~ {end_date}", "세그먼트별_RFM": []}
+    rfm = assign_segment(calculate_rfm(period_orders.copy()))
+    grouped = rfm.groupby("segment").agg(
+        고객수=("user_id", "count"),
+        평균_최근성_일=("Recency", "mean"),
+        평균_구매빈도=("Frequency", "mean"),
+        평균_구매금액=("Monetary", "mean"),
+    ).reset_index()
+    return {
+        "기간": f"{start_date} ~ {end_date}",
+        "세그먼트별_RFM": [
+            {
+                "세그먼트": str(row["segment"]),
+                "고객수": int(row["고객수"]),
+                "평균_최근성_일": round(float(row["평균_최근성_일"]), 1),
+                "평균_구매빈도": round(float(row["평균_구매빈도"]), 1),
+                "평균_구매금액": int(row["평균_구매금액"]),
+            }
+            for _, row in grouped.iterrows()
+        ],
+    }
+
+
+def tool_get_demographics(start_date: str, end_date: str) -> dict:
+    """특정 기간에 활동한(방문/조회/구매 등 이벤트가 있었던) 고객의 성별·연령대 분포를
+    반환한다. '고객 성별 비율', '연령대 분포가 어때' 같은 질문에 사용한다."""
+    users, orders, events = load_data()
+    start, end = pd.Timestamp(start_date).date(), pd.Timestamp(end_date).date()
+    _, period_events = get_period_slices(users, orders, events, start, end)
+    active_ids = period_events["user_id"].unique()
+    active_users = users[users["user_id"].isin(active_ids)].copy()
+    if active_users.empty:
+        return {"기간": f"{start_date} ~ {end_date}", "성별_분포": [], "연령대_분포": []}
+
+    gender_label = {"M": "남성", "F": "여성"}
+    gender_counts = active_users["gender"].value_counts()
+    gender_result = [{"성별": gender_label.get(k, k), "고객수": int(v)} for k, v in gender_counts.items()]
+
+    def age_bucket(age):
+        decade = int(age) // 10 * 10
+        return "60대 이상" if decade >= 60 else f"{decade}대"
+
+    active_users["연령대"] = active_users["age"].apply(age_bucket)
+    age_counts = active_users["연령대"].value_counts()
+    order = ["10대", "20대", "30대", "40대", "50대", "60대 이상"]
+    age_result = [{"연령대": k, "고객수": int(age_counts.get(k, 0))} for k in order if k in age_counts.index]
+
+    return {"기간": f"{start_date} ~ {end_date}", "성별_분포": gender_result, "연령대_분포": age_result}
+
+
 def recommend_segment(start_date, end_date, users: pd.DataFrame, orders: pd.DataFrame, events: pd.DataFrame) -> str:
     """선택한 기간의 지표를 기준으로 탭3 PERSONAS 키 중 하나를 추천한다.
 
@@ -451,6 +552,54 @@ CHATBOT_TOOLS = [
             "required": ["current_start", "current_end", "compare_start", "compare_end"],
         },
     },
+    {
+        "name": "get_gmv_trend",
+        "description": "특정 기간을 월별로 나눠 GMV와 주문 수 추이를 반환합니다. 'GMV 추이', '주문 수 추이' 같은 질문에 사용하세요.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "start_date": {"type": "string", "description": "조회 시작일 (YYYY-MM-DD)"},
+                "end_date": {"type": "string", "description": "조회 종료일 (YYYY-MM-DD)"},
+            },
+            "required": ["start_date", "end_date"],
+        },
+    },
+    {
+        "name": "get_purchase_funnel",
+        "description": "특정 기간의 구매 퍼널(방문 → 상품조회 → 장바구니 → 구매) 단계별 방문자 수와 단계 간 전환율을 반환합니다. '퍼널', '어디서 이탈이 많이 생겨' 같은 질문에 사용하세요.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "start_date": {"type": "string", "description": "조회 시작일 (YYYY-MM-DD)"},
+                "end_date": {"type": "string", "description": "조회 종료일 (YYYY-MM-DD)"},
+            },
+            "required": ["start_date", "end_date"],
+        },
+    },
+    {
+        "name": "get_rfm_summary",
+        "description": "특정 기간의 RFM(최근성/구매빈도/구매금액) 세그먼트별 평균값과 고객 수를 반환합니다. 'RFM 분포', '충성 고객은 얼마나 자주 사' 같은 질문에 사용하세요.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "start_date": {"type": "string", "description": "조회 시작일 (YYYY-MM-DD)"},
+                "end_date": {"type": "string", "description": "조회 종료일 (YYYY-MM-DD)"},
+            },
+            "required": ["start_date", "end_date"],
+        },
+    },
+    {
+        "name": "get_demographics",
+        "description": "특정 기간에 활동한 고객의 성별·연령대 분포를 반환합니다. '고객 성별 비율', '연령대 분포' 같은 질문에 사용하세요.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "start_date": {"type": "string", "description": "조회 시작일 (YYYY-MM-DD)"},
+                "end_date": {"type": "string", "description": "조회 종료일 (YYYY-MM-DD)"},
+            },
+            "required": ["start_date", "end_date"],
+        },
+    },
 ]
 
 TOOL_FUNCTIONS = {
@@ -462,6 +611,10 @@ TOOL_FUNCTIONS = {
     "get_cohort_retention": tool_get_cohort_retention,
     "get_top_priority_issue": tool_get_top_priority_issue,
     "get_kpi_comparison": tool_get_kpi_comparison,
+    "get_gmv_trend": tool_get_gmv_trend,
+    "get_purchase_funnel": tool_get_purchase_funnel,
+    "get_rfm_summary": tool_get_rfm_summary,
+    "get_demographics": tool_get_demographics,
 }
 
 # 답변에 "출처 태그"/"생각 과정"을 보여줄 때 쓰는 사람이 읽기 좋은 라벨.
@@ -476,6 +629,10 @@ TOOL_LABELS = {
     "get_persona_counts": {"label": "페르소나별 고객 수 조회", "chart_key": "persona"},
     "get_cohort_retention": {"label": "코호트 리텐션 조회", "chart_key": "cohort"},
     "get_top_priority_issue": {"label": "시급한 세그먼트 진단", "chart_key": None},
+    "get_gmv_trend": {"label": "GMV·주문 수 추이 조회", "chart_key": "gmv_trend"},
+    "get_purchase_funnel": {"label": "구매 퍼널 조회", "chart_key": "funnel"},
+    "get_rfm_summary": {"label": "RFM 세그먼트별 요약 조회", "chart_key": "rfm"},
+    "get_demographics": {"label": "성별·연령대 분포 조회", "chart_key": "demographics"},
 }
 
 
