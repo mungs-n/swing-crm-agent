@@ -18,7 +18,7 @@ from supabase import create_client
 AB_TESTS_COLUMNS = [
     "test_id", "test_name", "segment", "channel", "success_metric", "status",
     "created_at", "ended_at", "winner_group_id",
-    "group_id", "group_label", "is_control", "users", "conversions", "clicks", "opens",
+    "group_id", "group_label", "is_control", "campaign_id", "users", "conversions", "clicks", "opens",
 ]
 
 CAMPAIGN_SENDS_COLUMNS = [
@@ -72,6 +72,11 @@ def load_ab_tests() -> pd.DataFrame:
     df["created_at"] = pd.to_datetime(df["created_at"], errors="coerce")
     df["ended_at"] = pd.to_datetime(df["ended_at"], errors="coerce")
     df["is_control"] = df["is_control"].astype(bool)
+    # campaign_id는 실제 발송된 그룹에만 있다 (컨트롤/시뮬레이션 그룹은 빈 문자열).
+    # 기존에 이 컬럼 없이 저장된 ab_tests.csv를 읽을 때도 죽지 않도록 없으면 채워준다.
+    if "campaign_id" not in df.columns:
+        df["campaign_id"] = ""
+    df["campaign_id"] = df["campaign_id"].fillna("")
     return df
 
 
@@ -87,6 +92,38 @@ def save_ab_test(test_row: dict, groups: list[dict]) -> None:
 
     combined = pd.concat([existing, new_df], ignore_index=True)
     combined.to_csv("data/ab_tests.csv", index=False)
+
+
+def refresh_ab_test_stats() -> None:
+    """실제 발송된(campaign_id가 있는) 진행중 테스트 그룹들의 오픈/클릭/전환 수를
+    campaign_sends에서 다시 집계해서 ab_tests.csv에 반영한다. 시뮬레이션 그룹
+    (campaign_id 없음)은 그대로 둔다. results.py가 결과 화면을 그릴 때마다 호출한다."""
+    ab_df = load_ab_tests()
+    if ab_df.empty:
+        return
+    running = ab_df[(ab_df["status"] == "진행중") & (ab_df["campaign_id"] != "")]
+    if running.empty:
+        return
+
+    sends_df = load_campaign_sends()
+    full_df = load_ab_tests()
+    changed = False
+    for _, g in running.iterrows():
+        group_sends = sends_df[sends_df["campaign_id"] == g["campaign_id"]]
+        if group_sends.empty:
+            continue
+        opens = int(group_sends["opened_at"].notna().sum())
+        clicks = int(group_sends["clicked_at"].notna().sum())
+        conversions = int(group_sends["converted_order_id"].notna().sum())
+        mask = (full_df["test_id"] == g["test_id"]) & (full_df["group_id"] == g["group_id"])
+        full_df.loc[mask, "opens"] = opens
+        full_df.loc[mask, "clicks"] = clicks
+        full_df.loc[mask, "conversions"] = conversions
+        changed = True
+
+    if changed:
+        full_df.to_csv("data/ab_tests.csv", index=False)
+        load_ab_tests.clear()
 
 
 def cvr(users: int, conversions: int) -> float:

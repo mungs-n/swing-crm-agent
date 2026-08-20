@@ -9,13 +9,14 @@ A/B 테스트 생성 화면
 """
 
 import uuid
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 
 import pandas as pd
 import streamlit as st
 
 from ab_test.constants import ACCENT, CHANNEL_META, SEGMENT_OPTIONS, SUCCESS_METRICS
 from ab_test.data import load_campaign_sends, save_ab_test
+from automation.email_sender import KST, load_test_recipients, record_campaign_send, save_history, send_email
 
 
 def _init_state():
@@ -46,6 +47,21 @@ def _format_kr_datetime(d, t) -> str:
     hour_12 = t.hour % 12 or 12
     ampm = "오전" if t.hour < 12 else "오후"
     return f"{d.year}년 {d.month}월 {d.day}일 {ampm} {hour_12}:{t.minute:02d}"
+
+
+def _apportion(n: int, ratios: list[int]) -> list[int]:
+    """정수 n명을 ratios(합 100) 비율대로 나눠 정수 리스트로 돌려준다. 그냥 각각
+    round(n*ratio/100)로 나누면, 테스트 수신자가 적을 때(예: 1~2명) 반올림 때문에
+    모든 그룹이 0명이 되어 아무도 배정 못 받는 경우가 생긴다(사람이 통째로 증발).
+    최대잔여법(largest remainder method)을 써서, 몫의 합이 항상 n이 되도록 하고
+    비율이 큰 그룹부터 남는 인원을 확실히 배정한다."""
+    raw = [n * r / 100 for r in ratios]
+    counts = [int(x) for x in raw]
+    remainder = n - sum(counts)
+    order = sorted(range(len(ratios)), key=lambda i: raw[i] - counts[i], reverse=True)
+    for i in order[:remainder]:
+        counts[i] += 1
+    return counts
 
 
 def _target_size(segment: str) -> int:
@@ -246,10 +262,12 @@ def render_wizard():
 
 
 def _submit_test():
-    """현재는 SendGrid 실제 발송(email_sender.py 담당) 없이, ab_tests.csv에 그룹별
-    초기 행(전환 0)만 만들어둔다. 실제 오픈/클릭/전환은 email_sender.py 쪽에서 발송 후
-    campaign_sends.csv에 쌓이는 걸 다시 집계해서 업데이트하는 별도 배치가 필요하다
-    (희서/이주현 쪽과 연동 지점 확인 필요)."""
+    """channel이 email이면 실제로 SendGrid 발송까지 한다 — email_sender.py에 이미 있는
+    발송/기록 함수(send_email/save_history/record_campaign_send)를 캠페인 만들기 탭과
+    똑같은 방식으로 재사용하는 거라 그 파일 자체는 안 건드린다. email 외 채널은 실제
+    발송 함수가 없어서 기존처럼 그룹 행만 만들어두는 시뮬레이션으로 남겨둔다.
+    그룹별 오픈/클릭/전환 수는 ab_test/data.py의 refresh_ab_test_stats()가 이후
+    campaign_sends를 다시 집계해서 채워준다."""
     groups = [{**g, "is_control": False} for g in st.session_state["ab_groups"]]
     if st.session_state["ab_include_control"]:
         groups.append({
@@ -264,33 +282,115 @@ def _submit_test():
         st.error("컨트롤 그룹은 정확히 1개여야 해요.")
         return
 
+    channel = st.session_state["ab_channel"]
+    is_real_send = channel == "email"
+    send_at_ts = None
+
+    if is_real_send:
+        for g in groups:
+            if g["is_control"] or g["ratio"] <= 0:
+                continue
+            msg = st.session_state["ab_messages"].get(g["group_id"], {})
+            if not msg.get("title", "").strip() or not msg.get("text", "").strip():
+                st.error(f"'{g['label']}' 그룹의 메시지 제목/본문을 입력해주세요.")
+                return
+
+        recipients = load_test_recipients()
+        if recipients.empty:
+            st.error(
+                "data/test_recipients.csv 에 등록된 테스트 수신자가 없어서 실제 발송을 할 수 없어요. "
+                "name,email 컬럼으로 등록해주세요."
+            )
+            return
+
+        target_dt = datetime.combine(st.session_state["ab_send_date"], st.session_state["ab_send_time"])
+        if KST:
+            target_dt = target_dt.replace(tzinfo=KST)
+        now = datetime.now(KST) if KST else datetime.now()
+        is_future = target_dt > now
+        if is_future and target_dt > now + timedelta(hours=72):
+            st.error("SendGrid는 최대 72시간 이내 예약만 지원해요. 발송 시각을 다시 확인해주세요.")
+            return
+        send_at_ts = int(target_dt.timestamp()) if is_future else None
+
     test_id = str(uuid.uuid4())[:8]
-    size = _target_size(st.session_state["ab_target_segment"])
+    segment = st.session_state["ab_target_segment"]
     test_row = {
         "test_id": test_id,
-        "test_name": f"{st.session_state['ab_target_segment']} · {CHANNEL_META[st.session_state['ab_channel']]['label']} 테스트",
-        "segment": st.session_state["ab_target_segment"],
-        "channel": st.session_state["ab_channel"],
+        "test_name": f"{segment} · {CHANNEL_META[channel]['label']} 테스트",
+        "segment": segment,
+        "channel": channel,
         "success_metric": st.session_state["ab_success_metric"],
         "status": "진행중",
         "created_at": pd.Timestamp.now().isoformat(),
         "ended_at": "",
         "winner_group_id": "",
     }
-    group_rows = [
-        {
-            "group_id": g["group_id"],
-            "group_label": g["label"],
-            "is_control": g["is_control"],
-            "users": int(size * g["ratio"] / 100),
-            "conversions": 0,
-            "clicks": 0,
-            "opens": 0,
-        }
-        for g in groups
-    ]
+
+    if is_real_send:
+        group_rows = []
+        idx = 0
+        n = len(recipients)
+        counts = _apportion(n, [g["ratio"] for g in groups])
+        for g, count in zip(groups, counts):
+            group_recipients = recipients.iloc[idx: idx + count]
+            idx += count
+
+            campaign_id = ""
+            if not g["is_control"] and not group_recipients.empty:
+                msg = st.session_state["ab_messages"][g["group_id"]]
+                subject, body = msg["title"].strip(), msg["text"].strip()
+                campaign_id = f"{test_id}_{g['group_id']}"
+
+                success_count = 0
+                succeeded_sends = []  # (email, send_id) - campaign_history 행이 생긴 뒤에 기록 (FK)
+                for _, row in group_recipients.iterrows():
+                    send_id = str(uuid.uuid4())
+                    try:
+                        status = send_email(
+                            row["email"], subject, body, send_at=send_at_ts, send_id=send_id,
+                            image_bytes=msg.get("image_bytes"), image_name=msg.get("image_name"),
+                        )
+                        if status == 202:
+                            success_count += 1
+                            if send_at_ts is None:
+                                succeeded_sends.append((row["email"], send_id))
+                    except Exception as e:
+                        st.error(f"{row['email']} 발송 실패: {e}")
+
+                if success_count:
+                    save_history(
+                        segment, f"제목: {subject}\n\n본문: {body}", success_count,
+                        f"AB테스트 발송 ({g['label']} 그룹)", campaign_id=campaign_id,
+                    )
+                    for email, send_id in succeeded_sends:
+                        record_campaign_send(campaign_id, email, segment, channel, send_id)
+
+            group_rows.append({
+                "group_id": g["group_id"], "group_label": g["label"], "is_control": g["is_control"],
+                "campaign_id": campaign_id, "users": len(group_recipients),
+                "conversions": 0, "clicks": 0, "opens": 0,
+            })
+    else:
+        size = _target_size(segment)
+        group_rows = [
+            {
+                "group_id": g["group_id"], "group_label": g["label"], "is_control": g["is_control"],
+                "campaign_id": "", "users": int(size * g["ratio"] / 100),
+                "conversions": 0, "clicks": 0, "opens": 0,
+            }
+            for g in groups
+        ]
+
     save_ab_test(test_row, group_rows)
     _reset_state()
     st.session_state["ab_wizard_open"] = False
-    st.success(f"'{test_row['test_name']}' 테스트가 생성됐어요.")
+    if is_real_send:
+        sent_total = sum(r["users"] for r in group_rows if not r["is_control"])
+        st.success(f"'{test_row['test_name']}' 테스트가 생성되고 실제로 {sent_total}명에게 발송됐어요.")
+    else:
+        st.success(
+            f"'{test_row['test_name']}' 테스트가 생성됐어요. "
+            f"({CHANNEL_META[channel]['label']} 채널은 아직 실제 발송 연동 전이라 인원수만 채워둔 시뮬레이션이에요.)"
+        )
     st.rerun()

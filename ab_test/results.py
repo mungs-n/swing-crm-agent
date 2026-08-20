@@ -7,7 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from ab_test.constants import ACCENT, EMERALD, ROSE, STATUS_META
-from ab_test.data import cvr, load_ab_tests, test_summary_counts, two_proportion_test
+from ab_test.data import cvr, load_ab_tests, refresh_ab_test_stats, test_summary_counts, two_proportion_test
 
 
 def render_summary_header():
@@ -103,6 +103,7 @@ def _render_group_table(test_df: pd.DataFrame):
 def render_results():
     """생성된 A/B 테스트들을 테스트 단위로 카드에 렌더링. automation/page.py의
     'A/B 테스트' 서브탭에서 render_wizard() 아래에 이어서 호출."""
+    refresh_ab_test_stats()
     ab_df = load_ab_tests()
     if ab_df.empty:
         st.info("아직 생성된 A/B 테스트가 없어요. 위에서 새 테스트를 만들어보세요.")
