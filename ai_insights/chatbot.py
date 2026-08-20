@@ -648,7 +648,15 @@ def _describe_tool_call(name: str, tool_input: dict) -> str:
         period = ""
     return f"{label}" + (f" ({period})" if period else "")
 
-CHATBOT_SYSTEM_PROMPT = f"""당신은 ATHLEPA CRM 대시보드에 내장된 데이터 조회 챗봇입니다.
+def _build_system_prompt() -> str:
+    """회사명을 하드코딩하지 않고 로그인/데이터셋 선택 때 정해지는
+    st.session_state["auth_company_name"]을 그대로 읽어온다. 이렇게 하면 나중에 다른
+    회사가 이 앱을 쓰게 되거나(로그인 정보가 바뀌거나), 데이터셋 선택(ATHLEPA/데이콘)이
+    바뀌어도 챗봇이 항상 "지금 보고 있는 회사"로 자기소개를 하게 된다. 매번 호출 시점의
+    session_state를 읽도록 함수로 만들어뒀다 — 모듈 로드 시점에 한 번만 굳어버리는
+    상수로 두면, 로그인 후 회사가 바뀌어도 챗봇은 이전 값을 계속 들고 있게 된다."""
+    company = st.session_state.get("auth_company_name", "ATHLEPA")
+    return f"""당신은 {company} CRM 대시보드에 내장된 데이터 조회 챗봇입니다.
 
 우리가 가진 데이터는 {DATASET_MIN_DATE} ~ {DATASET_MAX_DATE} 기간의 시뮬레이션 데이터입니다.
 사용자가 "이번 주", "지난달", "최근" 같은 상대적 표현을 쓰면, 오늘 날짜가 아니라 이
@@ -681,7 +689,7 @@ CHATBOT_SYSTEM_PROMPT = f"""당신은 ATHLEPA CRM 대시보드에 내장된 데�
    시작하세요. 가능하면 관련 도구를 먼저 호출해서 실제 지표를 근거로 함께 제시하세요.
 
 4. 무관한 질문 (매장/CRM 데이터와 전혀 관계없는 질문, 예: 날씨, 잡담, 이 챗봇의 정체 등)
-   → 도구를 호출하지 말고, "죄송해요, 이 챗봇은 ATHLEPA 매장 데이터 관련 질문만 답할
+   → 도구를 호출하지 말고, "죄송해요, 이 챗봇은 {company} 매장 데이터 관련 질문만 답할
    수 있어요."라고 정중히 안내하세요.
 
 규칙:
@@ -716,7 +724,7 @@ def run_chatbot_turn(messages: list) -> tuple[str, list]:
         response = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=1200,
-            system=CHATBOT_SYSTEM_PROMPT,
+            system=_build_system_prompt(),
             tools=CHATBOT_TOOLS,
             messages=working_messages,
         )
@@ -754,9 +762,9 @@ def run_chatbot_turn(messages: list) -> tuple[str, list]:
 
 EXAMPLE_QUESTIONS = [
     "지금 가장 시급한 문제는?",
-    "이번 주 매출은 얼마야?",
     "저번 주보다 매출 늘었어?",
-    "카테고리별 매출 순위 알려줘",
+    "구매 퍼널에서 어디가 제일 많이 새?",
+    "전환율을 어떻게 올리면 좋을까?",
 ]
 
 EXECUTION_MODES = ["제안만 (승인 후 실행)", "완전 자동 실행"]
@@ -768,12 +776,20 @@ EXECUTION_MODES = ["제안만 (승인 후 실행)", "완전 자동 실행"]
 # 확인해서 여기 선택자만 맞춰주면 된다.
 AI_CHAT_CSS = """
 <style>
+/* 텍스트 라벨("AI 어시스턴트") 대신 아이콘 하나만 있는 동그란 FAB. 안 읽은 메시지가
+   있으면 숫자만 같이 보여준다(예: "💬 2"). p 태그 margin을 0으로 맞추는 것도
+   피드백 버튼과 같은 이유(아이콘이 원 중앙에서 살짝 밀려 보이는 문제 방지). */
 div[class*="st-key-ai-fab"] {
     position: fixed; right: 28px; bottom: 28px; z-index: 999999; width: auto;
 }
 div[class*="st-key-ai-fab"] button {
-    border-radius: 999px; background: var(--athlepa-primary); color: #fff; border: none;
-    box-shadow: 0 6px 18px rgba(124,58,237,0.35); font-weight: 600; padding: 10px 18px;
+    border-radius: 50%; background: var(--athlepa-primary); color: #fff; border: none;
+    box-shadow: 0 6px 18px rgba(124,58,237,0.35); font-weight: 600;
+    width: 56px !important; height: 56px !important; padding: 0 !important; font-size: 15px !important;
+    display: flex !important; align-items: center !important; justify-content: center !important;
+}
+div[class*="st-key-ai-fab"] button p {
+    margin: 0 !important; display: flex !important; align-items: center !important; gap: 3px;
 }
 div[class*="st-key-ai-fab"] button:hover { background: var(--athlepa-primary-hover); color: #fff; }
 
@@ -784,11 +800,18 @@ div[class*="st-key-ai-overlay"] button {
     width: 100vw; height: 100vh; background: transparent; border: none; cursor: default;
 }
 
+/* 380px 폭에 기본 글씨 크기 그대로 두니 글씨가 패널에 비해 커 보인다는 피드백이
+   있어서, 패널을 조금 넓히고(380→440px, 세로도 72→80vh) 안쪽 글씨는 살짝 줄였다. */
 div[class*="st-key-ai-panel"] {
-    position: fixed; right: 28px; bottom: 96px; width: 380px; max-height: 72vh;
+    position: fixed; right: 28px; bottom: 96px; width: 440px; max-height: 80vh;
     background: #fff; border: 1px solid var(--athlepa-border); border-radius: 14px;
     box-shadow: 0 16px 40px rgba(17,16,24,0.18); z-index: 999998;
     overflow-y: auto; padding: 8px 14px 12px;
+}
+div[class*="st-key-ai-panel"] [data-testid="stChatMessage"] p,
+div[class*="st-key-ai-panel"] [data-testid="stChatMessage"] li,
+div[class*="st-key-ai-panel"] [data-testid="stMarkdownContainer"] p {
+    font-size: 13.5px !important; line-height: 1.55 !important;
 }
 
 div[class*="st-key-ai-src-"] button {
@@ -903,11 +926,16 @@ def _ask_chatbot(question: str):
     st.session_state.chat_meta.append({"sources": sources, "thinking": thinking, "feedback": None})
 
 
-def _jump_to_chart(chart_key: str):
+def _jump_to_chart(chart_key: str, label: str = ""):
     """출처 태그를 클릭하면 대시보드 페이지로 이동하면서, 어떤 차트를 보고 있었는지
     session_state에 남겨둔다. dashboard/charts.py 쪽에서 이 값(dashboard_highlight_chart)을
     읽어서 해당 차트를 강조 표시해주는 코드는 아직 없다 — 그건 그 파일 담당자와 별도로
-    맞춰야 한다. 지금은 페이지 이동까지만 이 파일 안에서 완결된다."""
+    맞춰야 한다. 지금은 페이지 이동까지만 이 파일 안에서 완결된다.
+
+    st.toast는 딱 한 번의 rerun(=페이지 이동 1번)까지는 화면에 남아있는 Streamlit
+    기능이라, 페이지가 바뀐 직후에도 "어디로, 왜 이동했는지"가 잠깐 보인다. 이게 없으면
+    클릭했을 때 로딩만 살짝 뜨고 아무 반응이 없는 것처럼 느껴진다는 피드백이 있었다."""
+    st.toast(f"'{label}' 관련 차트로 이동했어요 (차트 강조 표시는 아직 준비 중이에요)", icon="📊")
     st.session_state["dashboard_highlight_chart"] = chart_key
     st.switch_page("dashboard/page.py")
 
@@ -948,7 +976,7 @@ def _render_message(idx: int, msg: dict, meta: dict):
                 for s_i, source in enumerate(sources):
                     if source["chart_key"]:
                         if st.button(f"📊 출처: {source['label']}", key=f"src_{idx}_{s_i}"):
-                            _jump_to_chart(source["chart_key"])
+                            _jump_to_chart(source["chart_key"], source["label"])
                     else:
                         st.button(f"출처: {source['label']}", key=f"src_{idx}_{s_i}", disabled=True)
 
@@ -1034,8 +1062,9 @@ def render_floating_chat(force_open_once: bool = False):
                 )
 
             if not st.session_state.chat_messages:
+                company = st.session_state.get("auth_company_name", "ATHLEPA")
                 st.markdown(
-                    "안녕하세요! ATHLEPA CRM AI 어시스턴트입니다.  \n"
+                    f"안녕하세요! {company} CRM AI 어시스턴트입니다.  \n"
                     "고객 데이터 분석, 세그먼트 조회 등 원하는 걸 물어보세요."
                 )
                 cols = st.columns(2)
@@ -1068,10 +1097,12 @@ def render_floating_chat(force_open_once: bool = False):
 
     with st.container(key="ai-fab"):
         unseen = len(st.session_state.chat_messages) - st.session_state["chat_seen_count"]
-        if is_open or unseen <= 0:
-            fab_label = "💬 AI 어시스턴트"
+        if is_open:
+            fab_label = "✕"
+        elif unseen > 0:
+            fab_label = f"💬 {unseen}"
         else:
-            fab_label = f"💬 AI 어시스턴트 · {unseen}"
-        if st.button(fab_label, key="ai_fab_btn"):
+            fab_label = "💬"
+        if st.button(fab_label, key="ai_fab_btn", help="AI 어시스턴트"):
             st.session_state["chat_panel_open"] = not is_open
             st.rerun()
