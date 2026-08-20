@@ -84,6 +84,10 @@ def _add_group():
 
 
 def _block_groups():
+    """그룹 비율은 항상 합이 100%가 되도록 자동 배분한다. 컨트롤(홀드아웃) 비율은
+    보통 팀이 의도적으로 작게 고정해두는 값이라 직접 슬라이더로 조절하게 두고,
+    A/B 그룹들은 '컨트롤을 뺀 나머지' 안에서 순서대로 소비하는 방식으로 자동 배분한다
+    (마지막 그룹은 슬라이더 없이 남은 비율을 그대로 가져감 - 그래서 항상 100%)."""
     with st.container(border=True):
         col_title, col_add = st.columns([4, 1.2])
         with col_title:
@@ -93,39 +97,54 @@ def _block_groups():
                 st.button(":material/add: 그룹 추가", key="grp-add", on_click=_add_group, use_container_width=True)
 
         groups = st.session_state["ab_groups"]
-        total_ratio = 0
         size = _target_size(st.session_state["ab_target_segment"])
 
+        # 컨트롤(홀드아웃)은 박스/뱃지로 안 빼고, 슬라이더 색만 회색으로 바꿔서
+        # "발송 없는 그룹"이라는 걸 A/B 그룹(보라색)과 구분한다. Streamlit 슬라이더는
+        # 색을 직접 지정하는 옵션이 없어서, 이 슬라이더만 감싼 컨테이너에 grayscale
+        # 필터를 걸어 우회한다 (값 위치에 따른 채움 너비 로직은 그대로 두고 색만 뺌).
+        st.markdown(
+            "<style>div[class*='st-key-grp-control-slider'] [data-testid='stSlider']"
+            " { filter: grayscale(1); }</style>",
+            unsafe_allow_html=True,
+        )
+        st.session_state["ab_include_control"] = st.toggle(
+            "컨트롤 그룹 포함 (발송 없음 — 기준선)", value=st.session_state["ab_include_control"], key="grp-include-control",
+        )
+        control_ratio = 0
+        if st.session_state["ab_include_control"]:
+            cols = st.columns([2, 4, 1])
+            with cols[0]:
+                st.markdown("<div style='padding-top:8px;color:#6B7280'>컨트롤</div>", unsafe_allow_html=True)
+            with cols[1]:
+                with st.container(key="grp-control-slider"):
+                    st.session_state["ab_control_ratio"] = st.slider(
+                        "컨트롤 비율(%)", 0, 100, st.session_state["ab_control_ratio"], key="grp-ctrl-ratio", label_visibility="collapsed",
+                    )
+            with cols[2]:
+                st.markdown(
+                    f"<div style='padding-top:8px;font-weight:700;color:#6B7280'>{st.session_state['ab_control_ratio']}%</div>",
+                    unsafe_allow_html=True,
+                )
+            control_ratio = st.session_state["ab_control_ratio"]
+
+        remaining = max(0, 100 - control_ratio)
         for i, g in enumerate(groups):
+            is_last = i == len(groups) - 1
             cols = st.columns([2, 4, 1])
             with cols[0]:
                 g["label"] = st.text_input("그룹명", value=g["label"], key=f"grp-label-{i}", label_visibility="collapsed")
             with cols[1]:
-                g["ratio"] = st.slider("비율(%)", 0, 100, g["ratio"], key=f"grp-ratio-{i}", label_visibility="collapsed")
+                if is_last:
+                    g["ratio"] = remaining
+                    st.markdown("<div style='padding-top:8px;color:#9AA0AE;font-size:12.5px'>나머지 자동 배정</div>", unsafe_allow_html=True)
+                else:
+                    g["ratio"] = st.slider(
+                        "비율(%)", 0, remaining, min(g["ratio"], remaining), key=f"grp-ratio-{i}", label_visibility="collapsed",
+                    )
+                    remaining -= g["ratio"]
             with cols[2]:
                 st.markdown(f"<div style='padding-top:8px;font-weight:700;color:{ACCENT}'>{g['ratio']}%</div>", unsafe_allow_html=True)
-            total_ratio += g["ratio"]
-
-        st.session_state["ab_include_control"] = st.checkbox(
-            "컨트롤 그룹 사용 (발송 없음 — 기준선)", value=st.session_state["ab_include_control"], key="grp-include-control",
-        )
-        if st.session_state["ab_include_control"]:
-            cols = st.columns([2, 4, 1])
-            with cols[0]:
-                st.markdown("<div style='padding-top:8px'>컨트롤</div>", unsafe_allow_html=True)
-            with cols[1]:
-                st.session_state["ab_control_ratio"] = st.slider(
-                    "컨트롤 비율(%)", 0, 100, st.session_state["ab_control_ratio"], key="grp-ctrl-ratio", label_visibility="collapsed",
-                )
-            with cols[2]:
-                st.markdown(
-                    f"<div style='padding-top:8px;font-weight:700;color:{ACCENT}'>{st.session_state['ab_control_ratio']}%</div>",
-                    unsafe_allow_html=True,
-                )
-            total_ratio += st.session_state["ab_control_ratio"]
-
-        if total_ratio != 100:
-            st.warning(f"그룹 비율 합계가 {total_ratio}%예요. 100%가 되도록 맞춰주세요.")
 
         for g in groups:
             st.caption(f"{g['label']} · 약 {int(size * g['ratio'] / 100):,}명")
