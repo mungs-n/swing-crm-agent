@@ -23,6 +23,18 @@ st.markdown(
 
 st.set_page_config(layout="wide")
 
+st.markdown(
+    """
+    <style>
+        /* 제목과 우측 버튼의 세로 중앙 정렬 (버튼이 st.title보다 낮게 보이던 문제 수정) */
+        div[data-testid="stHorizontalBlock"]:has(> div [data-testid="stMarkdownContainer"] h1) {
+            align-items: center;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 col_title, col_btn = st.columns([4, 1])
 with col_title:
     st.title("캠페인 관리")
@@ -200,9 +212,16 @@ def render_campaign_table(search_text: str = "", status_filter: str = "전체"):
         /* '이름' 열: 보이는 텍스트(.ct-name-visible)는 다른 칸과 완전히 같은
            방식으로 그리고, 그 칸을 담고 있는 컬럼을 기준(position:relative)으로
            삼아 버튼을 투명하게(opacity:0) 그 위에 꽉 채워 덮어씌운다.
-           버튼은 눈에 안 보이고 클릭만 받는 용도. */
-        div[data-testid="stHorizontalBlock"] > div:has(button[data-testid="stBaseButton-tertiary"]),
-        div[data-testid="stHorizontalBlock"] > div:has(button[kind="tertiary"]) {
+           버튼은 눈에 안 보이고 클릭만 받는 용도.
+
+           ⚠️ 아래 규칙들은 반드시 ".ct-name-visible"이 들어있는 칸으로만
+           범위를 한정해야 한다. 예전에는 `div[data-testid="stButton"]`,
+           `button[kind="tertiary"]`처럼 페이지 전체를 대상으로 하는 선택자를
+           썼는데, 이 페이지에는 캠페인 생성 화면(render_campaign_builder)의
+           "완료/수정", "이전 단계/다음 단계", "테스트 발송" 같은 다른 버튼들도
+           함께 렌더링되기 때문에 그 버튼들까지 position:absolute; opacity:0
+           으로 깨져버리는 충돌이 있었다. */
+        div[data-testid="stHorizontalBlock"] > div:has(.ct-name-visible) {
             position: relative;
         }
         .ct-name-visible {
@@ -210,13 +229,12 @@ def render_campaign_table(search_text: str = "", status_filter: str = "전체"):
             font-weight: 500;
             pointer-events: none; /* 텍스트 자체는 클릭을 막고, 아래 버튼이 받게 함 */
         }
-        div[data-testid="stButton"] {
+        div[data-testid="stHorizontalBlock"] > div:has(.ct-name-visible) div[data-testid="stButton"] {
             position: absolute !important;
             inset: 0 !important;
             margin: 0 !important;
         }
-        div[data-testid="stButton"] > button[kind="tertiary"],
-        button[data-testid="stBaseButton-tertiary"] {
+        div[data-testid="stHorizontalBlock"] > div:has(.ct-name-visible) button[data-testid="stBaseButton-tertiary"] {
             position: absolute !important;
             inset: 0 !important;
             width: 100% !important;
@@ -227,8 +245,7 @@ def render_campaign_table(search_text: str = "", status_filter: str = "전체"):
             margin: 0 !important;
         }
         /* 버튼(투명)에 마우스가 올라가면 그 위에 겹쳐진 텍스트에 밑줄 표시 */
-        div[data-testid="stHorizontalBlock"] > div:has(button[data-testid="stBaseButton-tertiary"]:hover) .ct-name-visible,
-        div[data-testid="stHorizontalBlock"] > div:has(button[kind="tertiary"]:hover) .ct-name-visible {
+        div[data-testid="stHorizontalBlock"] > div:has(.ct-name-visible):has(button[data-testid="stBaseButton-tertiary"]:hover) .ct-name-visible {
             text-decoration: underline;
         }
         </style>
