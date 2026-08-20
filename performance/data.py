@@ -116,7 +116,11 @@ def kpi_summary(sends_df: pd.DataFrame, date_from, date_to) -> dict:
     delivered = period[period["delivered"]]
 
     sent = len(delivered)
-    trackable = delivered[delivered["channel"].map(_CLICK_TRACKABLE)]
+    # _CLICK_TRACKABLE에 없는 채널 값(캠페인 만들기 쪽이 "카카오톡"처럼 내부 키가
+    # 아닌 표시 라벨을 그대로 channel로 저장하는 경우 등)이 있으면 .map()이 NaN을
+    # 돌려주는데, pandas는 NaN 섞인 값을 boolean 마스크로 못 써서 그대로 두면
+    # ValueError가 난다. fillna(False)로 "추적 안 되는 채널"로 안전하게 처리한다.
+    trackable = delivered[delivered["channel"].map(_CLICK_TRACKABLE).fillna(False)]
     clicks = trackable["clicked_at"].notna().sum()
     ctr = (clicks / len(trackable) * 100) if len(trackable) else 0.0
 
