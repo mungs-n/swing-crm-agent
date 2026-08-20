@@ -28,6 +28,11 @@ CAMPAIGN_SENDS_COLUMNS = [
 
 _PAGE_SIZE = 1000  # Supabase(PostgREST)가 한 번에 최대 1000행만 돌려줌
 
+# success_metric 값("open"/"click"/"conversion") -> 그룹별로 몇 건을 성공으로 셀지,
+# 그 건수가 담긴 컬럼명 매핑. 통계 계산(유의성 KPI, 결과 테이블)이 항상 전환 기준으로만
+# 계산하고 실제 선택한 성공 지표를 무시하던 버그를 고치면서 추가했다.
+METRIC_COUNT_FIELD = {"open": "opens", "click": "clicks", "conversion": "conversions"}
+
 
 def _get_client():
     return create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_ROLE_KEY"])
@@ -181,6 +186,7 @@ def test_summary_counts() -> dict:
 
     significant = 0
     for test_id, test_df in ab_df.groupby("test_id"):
+        count_field = METRIC_COUNT_FIELD.get(test_df["success_metric"].iloc[0], "conversions")
         control = test_df[test_df["is_control"]]
         baseline = control.iloc[0] if not control.empty else test_df.iloc[0]
         is_sig = False
@@ -188,7 +194,7 @@ def test_summary_counts() -> dict:
             if g["group_id"] == baseline["group_id"]:
                 continue
             _, _, p_value = two_proportion_test(
-                int(baseline["users"]), int(baseline["conversions"]), int(g["users"]), int(g["conversions"])
+                int(baseline["users"]), int(baseline[count_field]), int(g["users"]), int(g[count_field])
             )
             if p_value is not None and p_value < 0.05:
                 is_sig = True
