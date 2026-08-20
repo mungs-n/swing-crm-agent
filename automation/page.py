@@ -1,9 +1,11 @@
 import streamlit as st
 import pandas as pd
 
+import math
+
 from ab_test.page import render_ab_test
 from automation.campaign_builder import render_campaign_builder
-from automation.email_sender import render_history, get_scheduler, render_recurring_campaigns_panel
+from automation.email_sender import get_scheduler, render_recurring_campaigns_panel
 from performance.page import render_performance
 
 HISTORY_FILE = "data/campaign_history.csv"
@@ -36,20 +38,25 @@ st.markdown(
 )
 
 # ==============================================================================
-# 캠페인 목록 테이블 (1번 사진 디자인 반영)
+# 캠페인 목록 테이블
 #
-# data/campaign_history.csv 에는 캠페인 "이름", "태그", "발송 유형" 같은 컬럼이
-# 원래 없어서(세그먼트/메시지 요약/상태 문장만 저장됨), 있는 값들로부터 최대한
+# data/campaign_history.csv 에는 캠페인 "이름", "발송 유형" 같은 컬럼이 원래
+# 없어서(세그먼트/메시지 요약/상태 문장만 저장됨), 있는 값들로부터 최대한
 # 자연스럽게 유추해서 채운다. 나중에 csv 스키마 자체를 확장하면 이 부분을
 # 실제 저장된 값으로 그대로 교체하면 된다.
 # ==============================================================================
 
-CHANNEL_LABELS = {
-    "카카오톡": "카카오톡 🟡",
-    "문자": "문자(SMS/LMS) 💬",
-    "웹 푸시": "웹 푸시 🔔",
-    "이메일": "이메일 ✉️",
+STATUS_OPTIONS = ["초안", "임시 저장", "테스트 발송", "예약 대기", "반복 발송", "발송 완료"]
+
+# (표시 라벨, 배경색, 글자색) - 참고 이미지 색상 팔레트에 맞춤
+CHANNEL_STYLES = {
+    "카카오톡": ("카카오톡", "#FFEDD5", "#C2703D"),
+    "문자": ("문자(SMS/LMS)", "#DBEAFE", "#1E40AF"),
+    "웹 푸시": ("웹 푸시", "#DCFCE7", "#2F9E44"),
+    "이메일": ("이메일", "#F3E8FF", "#7C3AED"),
 }
+
+PAGE_SIZE = 10
 
 
 def _status_info(raw_status: str):
@@ -77,11 +84,13 @@ def _send_type(raw_status: str) -> str:
     return "-"
 
 
-def _channel_badge(raw_status: str) -> str:
-    for key, label in CHANNEL_LABELS.items():
-        if key in str(raw_status):
-            return label
-    return ""
+def _channel_badge(raw_status: str):
+    """상태 문장에서 채널을 찾아 (표시 라벨, 배경색, 글자색)을 반환한다."""
+    s = str(raw_status)
+    for key, style in CHANNEL_STYLES.items():
+        if key in s:
+            return style
+    return None
 
 
 @st.cache_data(ttl=5)
@@ -95,31 +104,68 @@ def _load_campaign_rows() -> pd.DataFrame:
         return df
 
     df = df.reset_index(drop=True)
-    df["키"] = range(1, len(df) + 1)
 
     dot_and_label = df["상태"].map(_status_info)
     df["_dot"] = dot_and_label.map(lambda t: t[0])
     df["상태_표시"] = dot_and_label.map(lambda t: t[1])
     df["발송 유형"] = df["상태"].map(_send_type)
-    df["채널"] = df["상태"].map(_channel_badge)
+
+    channel_style = df["상태"].map(_channel_badge)
+    df["채널"] = channel_style.map(lambda t: t[0] if t else "")
+    df["_채널_bg"] = channel_style.map(lambda t: t[1] if t else "")
+    df["_채널_fg"] = channel_style.map(lambda t: t[2] if t else "")
+
     df["이름"] = df["세그먼트"].astype(str) + " 캠페인"
     df["발송 대상"] = df["세그먼트"]
     df["생성일"] = df["발송일시"].astype(str).str.slice(0, 10)
-    df["태그"] = "-"
 
-    # 최신 캠페인이 위로 오도록
-    return df.iloc[::-1].reset_index(drop=True)
+    # 키 번호는 생성된 순서(오름차순, 1=가장 오래된 캠페인)를 유지하되,
+    # 실제 화면에는 가장 최근에 생성된 캠페인이 맨 위로 오도록 뒤집어서 보여준다.
+    df = df.reset_index(drop=True)
+    df["키"] = range(1, len(df) + 1)
+    df = df.iloc[::-1].reset_index(drop=True)
+    return df
 
 
-_TABLE_COL_RATIO = [0.4, 2.2, 1.3, 2, 1.8, 0.8, 1.1]
+_TABLE_COL_RATIO = [0.4, 2.2, 1.3, 2.2, 1.8, 1.1]
 
 
-def render_campaign_table(search_text: str = "", status_filter: str = "전체"):
+def _status_filter_state():
+    """세션에 저장된 상태 필터 체크 상태를 읽는다 (위젯을 그리지는 않음)."""
+    for status in STATUS_OPTIONS:
+        st.session_state.setdefault(f"status_chk_{status}", True)
+    return {s for s in STATUS_OPTIONS if st.session_state.get(f"status_chk_{s}", True)}
+
+
+def _status_header_popover():
+    """테이블 헤더의 '상태' 칸 자체를 눌렀을 때 뜨는 팝오버.
+    (GitHub의 '브랜치 전환' 버튼처럼, 목록 위에 따로 필터 바를 두지 않고
+    헤더 라벨 자리에서 바로 상태를 체크박스로 선택한다.)"""
+    chosen = [s for s in STATUS_OPTIONS if st.session_state.get(f"status_chk_{s}", True)]
+    if len(chosen) == len(STATUS_OPTIONS):
+        suffix = ""
+    elif len(chosen) == 0:
+        suffix = " (없음)"
+    elif len(chosen) <= 2:
+        suffix = f" ({', '.join(chosen)})"
+    else:
+        suffix = f" ({len(chosen)}개)"
+
+    st.markdown("<span class='ct-status-th-anchor'></span>", unsafe_allow_html=True)
+    with st.popover(f"상태{suffix}"):
+        st.caption("표시할 상태를 선택하세요 (복수 선택 가능)")
+        for status in STATUS_OPTIONS:
+            st.checkbox(status, key=f"status_chk_{status}")
+
+
+def render_campaign_table(search_text: str = ""):
     df = _load_campaign_rows()
 
     if df.empty:
         st.info("아직 생성된 캠페인이 없습니다. 우측 상단 [+ 캠페인 생성하기]로 첫 캠페인을 만들어보세요.")
         return
+
+    active_statuses = _status_filter_state()
 
     filtered = df
     if search_text:
@@ -129,8 +175,7 @@ def render_campaign_table(search_text: str = "", status_filter: str = "전체"):
         )
         filtered = filtered[mask]
 
-    if status_filter and status_filter != "전체":
-        filtered = filtered[filtered["상태_표시"] == status_filter]
+    filtered = filtered[filtered["상태_표시"].isin(active_statuses)] if active_statuses else filtered.iloc[0:0]
 
     st.markdown(
         """
@@ -160,11 +205,10 @@ def render_campaign_table(search_text: str = "", status_filter: str = "전체"):
         .ct-channel {
             margin-left: 6px;
             font-size: 0.72rem;
-            color: #6B7280;
-            background: #F3F4F6;
-            padding: 2px 7px;
-            border-radius: 6px;
+            padding: 2px 8px;
+            border-radius: 999px;
             white-space: nowrap;
+            font-weight: 500;
         }
         .ct-detail-box {
             background-color: #F8F9FA;
@@ -177,44 +221,56 @@ def render_campaign_table(search_text: str = "", status_filter: str = "전체"):
             white-space: pre-wrap;
         }
 
-        /* '이름' 열: 보이는 텍스트(.ct-name-visible)는 다른 칸과 완전히 같은
-           방식으로 그리고, 그 칸을 담고 있는 컬럼을 기준(position:relative)으로
-           삼아 버튼을 투명하게(opacity:0) 그 위에 꽉 채워 덮어씌운다.
-           버튼은 눈에 안 보이고 클릭만 받는 용도.
-
-           ⚠️ 아래 규칙들은 반드시 ".ct-name-visible"이 들어있는 칸으로만
-           범위를 한정해야 한다. 예전에는 `div[data-testid="stButton"]`,
-           `button[kind="tertiary"]`처럼 페이지 전체를 대상으로 하는 선택자를
-           썼는데, 이 페이지에는 캠페인 생성 화면(render_campaign_builder)의
-           "완료/수정", "이전 단계/다음 단계", "테스트 발송" 같은 다른 버튼들도
-           함께 렌더링되기 때문에 그 버튼들까지 position:absolute; opacity:0
-           으로 깨져버리는 충돌이 있었다. */
-        div[data-testid="stHorizontalBlock"] > div:has(.ct-name-visible) {
-            position: relative;
+        /* '이름' 열: 실제 버튼 그 자체를 링크처럼 보이도록 스타일링한다.
+           (예전에는 투명한 버튼을 텍스트 위에 absolute로 겹치는 방식이라
+           버튼 내부 여백이 버전마다 달라 클릭 위치가 눈에 보이는 텍스트와
+           어긋나는 문제가 있었다. 지금은 보이는 요소 = 클릭되는 요소라
+           위치가 항상 정확히 일치한다.) */
+        div[data-testid="stHorizontalBlock"] > div:has(.ct-name-marker) {
+            margin-top: -6px;
         }
-        .ct-name-visible {
-            color: #7C3AED;
-            font-weight: 500;
-            pointer-events: none; /* 텍스트 자체는 클릭을 막고, 아래 버튼이 받게 함 */
+        div[data-testid="stHorizontalBlock"] > div:has(.ct-name-marker) button[data-testid="stBaseButton-tertiary"] {
+            color: #7C3AED !important;
+            font-weight: 500 !important;
+            font-size: 0.85rem !important;
+            justify-content: flex-start !important;
+            text-align: left !important;
+            padding: 6px 0 !important;
+            min-height: 34px !important;
+            background: transparent !important;
+            border: none !important;
+            box-shadow: none !important;
+            width: 100%;
         }
-        div[data-testid="stHorizontalBlock"] > div:has(.ct-name-visible) div[data-testid="stButton"] {
-            position: absolute !important;
-            inset: 0 !important;
-            margin: 0 !important;
-        }
-        div[data-testid="stHorizontalBlock"] > div:has(.ct-name-visible) button[data-testid="stBaseButton-tertiary"] {
-            position: absolute !important;
-            inset: 0 !important;
+        /* 버튼 내부에 Streamlit이 자체적으로 넣는 래퍼 div가 텍스트를 가운데
+           정렬시키는 경우가 있어서, 안쪽 요소까지 전부 왼쪽 정렬로 강제한다.
+           (이게 헤더의 '이름' 라벨과 실제 캠페인 이름이 서로 다른 위치에서
+           시작하는 것처럼 보이던 원인이었다.) */
+        div[data-testid="stHorizontalBlock"] > div:has(.ct-name-marker) button[data-testid="stBaseButton-tertiary"] div {
+            justify-content: flex-start !important;
+            text-align: left !important;
             width: 100% !important;
-            height: 100% !important;
-            opacity: 0 !important;
-            cursor: pointer;
+        }
+        div[data-testid="stHorizontalBlock"] > div:has(.ct-name-marker) button[data-testid="stBaseButton-tertiary"]:hover {
+            text-decoration: underline;
+        }
+
+        /* '상태' 헤더 칸: 팝오버를 여는 버튼을 다른 헤더 라벨(.ct-th)과
+           똑같은 모양(작은 회색 글씨, 배경/테두리 없음)으로 보이게 한다. */
+        div[data-testid="stHorizontalBlock"] > div:has(.ct-status-th-anchor) button {
+            color: #6B7280 !important;
+            font-weight: 600 !important;
+            font-size: 0.75rem !important;
+            background: transparent !important;
+            border: none !important;
+            box-shadow: none !important;
             padding: 0 !important;
             margin: 0 !important;
+            min-height: auto !important;
+            justify-content: flex-start !important;
         }
-        /* 버튼(투명)에 마우스가 올라가면 그 위에 겹쳐진 텍스트에 밑줄 표시 */
-        div[data-testid="stHorizontalBlock"] > div:has(.ct-name-visible):has(button[data-testid="stBaseButton-tertiary"]:hover) .ct-name-visible {
-            text-decoration: underline;
+        div[data-testid="stHorizontalBlock"] > div:has(.ct-status-th-anchor) button:hover {
+            color: #374151 !important;
         }
         </style>
         """,
@@ -223,34 +279,43 @@ def render_campaign_table(search_text: str = "", status_filter: str = "전체"):
 
     if filtered.empty:
         st.markdown(
-            "<div style='padding:32px; text-align:center; color:#9CA3AF; "
+            "<div style='padding:24px; text-align:left; color:#9CA3AF; "
             "border:1px solid #E5E7EB; border-radius:12px;'>검색/필터 조건에 맞는 캠페인이 없습니다.</div>",
             unsafe_allow_html=True,
         )
         return
 
+    # --- 페이지네이션 (한 페이지당 10개). 마법사(캠페인 생성)의 "다음 단계"와는
+    # 무관한, 목록만 넘기는 일반적인 페이지 이동이다. ---
+    total_count = len(filtered)
+    total_pages = max(1, math.ceil(total_count / PAGE_SIZE))
+    if "campaign_table_page" not in st.session_state:
+        st.session_state["campaign_table_page"] = 1
+    current_page = min(max(1, st.session_state["campaign_table_page"]), total_pages)
+    st.session_state["campaign_table_page"] = current_page
+
+    start = (current_page - 1) * PAGE_SIZE
+    page_df = filtered.iloc[start:start + PAGE_SIZE]
+
     with st.container(border=True):
         header_cols = st.columns(_TABLE_COL_RATIO)
-        for col, label in zip(header_cols, ["키", "이름", "상태", "발송 대상", "발송 유형", "태그", "생성일"]):
-            col.markdown(f"<span class='ct-th'>{label}</span>", unsafe_allow_html=True)
+        for col, label in zip(header_cols, ["키", "이름", "상태", "발송 대상", "발송 유형", "생성일"]):
+            if label == "상태":
+                with col:
+                    _status_header_popover()
+            else:
+                col.markdown(f"<span class='ct-th'>{label}</span>", unsafe_allow_html=True)
 
         st.markdown("<hr style='margin:6px 0 4px 0;border-color:#E5E7EB'>", unsafe_allow_html=True)
 
-        for _, row in filtered.iterrows():
+        for _, row in page_df.iterrows():
             row_cols = st.columns(_TABLE_COL_RATIO)
 
             with row_cols[0]:
                 st.markdown(f"<div class='ct-row-cell ct-key'>{row['키']}</div>", unsafe_allow_html=True)
             with row_cols[1]:
-                # 보이는 건 다른 칸과 똑같은 순수 텍스트(ct-row-cell)로 그리고,
-                # 그 위에 안 보이는(opacity:0) 버튼을 정확히 겹쳐서 클릭만 받는다.
-                # → Streamlit 버튼 자체의 내부 여백/줄간격이 버전마다 달라서
-                #   텍스트로 보이는 버튼은 계속 위아래로 미세하게 어긋났었음.
-                st.markdown(
-                    f"<div class='ct-row-cell ct-name-visible'>{row['이름']}</div>",
-                    unsafe_allow_html=True,
-                )
-                if st.button(row["이름"], key=f"camp_name_{row['키']}", type="tertiary"):
+                st.markdown("<span class='ct-name-marker'></span>", unsafe_allow_html=True)
+                if st.button(row["이름"], key=f"camp_name_{row['키']}", type="tertiary", use_container_width=True):
                     current = st.session_state.get("selected_campaign_key")
                     st.session_state["selected_campaign_key"] = None if current == row["키"] else row["키"]
                     st.rerun()
@@ -260,13 +325,17 @@ def render_campaign_table(search_text: str = "", status_filter: str = "전체"):
                     unsafe_allow_html=True,
                 )
             with row_cols[3]:
-                channel_html = f"<span class='ct-channel'>{row['채널']}</span>" if row["채널"] else ""
+                if row["채널"]:
+                    channel_html = (
+                        f"<span class='ct-channel' style='background:{row['_채널_bg']};"
+                        f"color:{row['_채널_fg']}'>{row['채널']}</span>"
+                    )
+                else:
+                    channel_html = ""
                 st.markdown(f"<div class='ct-row-cell'>{row['발송 대상']}{channel_html}</div>", unsafe_allow_html=True)
             with row_cols[4]:
                 st.markdown(f"<div class='ct-row-cell'>{row['발송 유형']}</div>", unsafe_allow_html=True)
             with row_cols[5]:
-                st.markdown(f"<div class='ct-row-cell ct-muted'>{row['태그']}</div>", unsafe_allow_html=True)
-            with row_cols[6]:
                 st.markdown(f"<div class='ct-row-cell ct-muted'>{row['생성일']}</div>", unsafe_allow_html=True)
 
             if st.session_state.get("selected_campaign_key") == row["키"]:
@@ -275,9 +344,11 @@ def render_campaign_table(search_text: str = "", status_filter: str = "전체"):
                 # 메시지 요약은 save_history()에서 더 이상 잘라 저장하지 않으므로
                 # 여기서도 그대로 전체를 보여준다 (별도로 자르는 로직 없음).
                 content = row.get("메시지 요약", "") or "(내용 없음)"
+                channel_name = row["채널"] or "-"
 
                 st.markdown(
                     "<div class='ct-detail-box'>"
+                    f"<b>발송 채널:</b> {channel_name} &nbsp;&nbsp; "
                     f"<b>발송 날짜:</b> {date_part or '-'} &nbsp;&nbsp; "
                     f"<b>발송 시간:</b> {time_part or '-'}<br><br>"
                     f"<b>내용</b><br>{content}"
@@ -287,10 +358,24 @@ def render_campaign_table(search_text: str = "", status_filter: str = "전체"):
 
             st.markdown("<hr style='margin:8px 0;border-color:#F3F4F6'>", unsafe_allow_html=True)
 
-    st.caption(f"총 {len(filtered)}개")
+    pcol1, pcol2, pcol3, pcol_spacer = st.columns([0.6, 0.6, 2, 4])
+    with pcol1:
+        if st.button("이전", disabled=current_page <= 1, use_container_width=True, key="camp_page_prev"):
+            st.session_state["campaign_table_page"] = current_page - 1
+            st.rerun()
+    with pcol2:
+        if st.button("다음", disabled=current_page >= total_pages, use_container_width=True, key="camp_page_next"):
+            st.session_state["campaign_table_page"] = current_page + 1
+            st.rerun()
+    with pcol3:
+        st.markdown(
+            f"<div style='text-align:left; color:#6B7280; font-size:0.85rem; padding-top:6px;'>"
+            f"{current_page} / {total_pages} 페이지 · 총 {total_count}개</div>",
+            unsafe_allow_html=True,
+        )
 
 
-st.title(":material/bolt: 캠페인 자동화")
+st.title("캠페인 자동화")
 
 tab_manage, tab_ab, tab_perf = st.tabs(["캠페인 관리", "A/B 테스트", "퍼포먼스 대시보드"])
 
@@ -303,36 +388,23 @@ with tab_manage:
         if st.button("+ 캠페인 생성하기", type="primary", use_container_width=True):
             st.session_state["show_campaign_builder"] = True
 
-    # 검색 및 필터 바 (이미지 디자인 반영)
-    fcol1, fcol2, fcol3 = st.columns([2, 1, 1])
-    with fcol1:
-        search_text = st.text_input(
-            "검색", placeholder="캠페인명 또는 키워드 검색", label_visibility="collapsed"
-        )
-    with fcol2:
-        status_filter = st.selectbox(
-            "상태 필터",
-            ["전체", "초안", "임시 저장", "테스트 발송", "예약 대기", "반복 발송", "발송 완료"],
-            label_visibility="collapsed",
-        )
-    with fcol3:
-        st.selectbox("태그 선택", ["태그 전체"], label_visibility="collapsed")
+    # 검색 바
+    search_text = st.text_input(
+        "검색", placeholder="캠페인명 또는 키워드 검색", label_visibility="collapsed"
+    )
 
     # 캠페인 생성 모달/화면 전환 처리
     if st.session_state.get("show_campaign_builder", False):
-        with st.expander("🚀 신규 캠페인 생성하기", expanded=True):
+        with st.expander("신규 캠페인 생성하기", expanded=True):
             render_campaign_builder()
             if st.button("닫기"):
                 st.session_state["show_campaign_builder"] = False
                 st.rerun()
 
-    render_campaign_table(search_text=search_text, status_filter=status_filter)
+    render_campaign_table(search_text=search_text)
 
     # 반복 발송 캠페인 목록 (일시정지/삭제)
     render_recurring_campaigns_panel()
-
-    # 예약/완료 발송 상세 이력은 접어서 그 아래에 유지
-    render_history()
 
 with tab_ab:
     render_ab_test()
