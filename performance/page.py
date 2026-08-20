@@ -12,7 +12,7 @@ automation/page.py에서 서브탭(캠페인 만들기 / A/B 테스트 / 퍼포�
         render_performance()
 """
 
-from datetime import date
+from datetime import date, timedelta
 
 import pandas as pd
 import streamlit as st
@@ -25,11 +25,31 @@ from performance.data import (
 from ab_test.data import load_campaign_sends
 
 
-def _kpi_card(label: str, value: str):
+def _pct_delta(current, previous):
+    """전기 대비 증감률(%). 전기 값이 0이면 0 반환 (dashboard/charts.py와 동일 로직)"""
+    if not previous:
+        return 0.0
+    return (current - previous) / previous * 100
+
+
+def _trend_pill(delta: float, unit: str = "%") -> str:
+    if delta > 0:
+        cls, arrow = "trend-up", "▲"
+    elif delta < 0:
+        cls, arrow = "trend-down", "▼"
+    else:
+        cls, arrow = "trend-neutral", ""
+    return f"<span class='trend-pill {cls}'>{arrow} {abs(delta):.1f}{unit}</span>"
+
+
+def _kpi_card(label: str, value: str, delta: float | None = None, unit: str = "%"):
+    """dashboard/charts.py의 _kpi_card와 같은 스타일(테마 CSS의 stat-card/trend-pill 클래스 재사용).
+    delta가 None이면 배지 없이 값만 표시(석세스 매트릭스 카드용)."""
+    trend_html = _trend_pill(delta, unit) if delta is not None else ""
     st.markdown(
-        f"<div style='background:#F5F5F8;border:1px solid {ACCENT}22;border-radius:12px;"
-        f"padding:14px 18px'><div style='font-size:12px;color:#6B7280;margin-bottom:4px'>{label}</div>"
-        f"<div style='font-size:1.4rem;font-weight:700'>{value}</div></div>",
+        f"<div class='stat-card-top'><span class='stat-label'>{label}</span>{trend_html}</div>"
+        f"<div class='stat-value'>{value}</div>"
+        + (f"<div class='stat-sub'>이전 기간 대비</div>" if delta is not None else ""),
         unsafe_allow_html=True,
     )
 
@@ -46,28 +66,31 @@ def _fmt_pct_signed(v) -> str:
     return "-" if pd.isna(v) else f"{v:+.1f}%p"
 
 
-def _render_kpis(kpi: dict):
+def _render_kpis(kpi: dict, kpi_prev: dict):
     cols = st.columns(5)
     items = [
-        ("발송 메시지 수", f"{kpi['sent']:,}"),
-        ("클릭률", _fmt_pct(kpi["ctr"])),
-        ("전환율", _fmt_pct(kpi["cvr"])),
-        ("전환 구매금액", _fmt_won(kpi["revenue"])),
-        ("자동화 기여 매출 비중", f"{kpi['auto_share']:.0f}%"),
+        ("발송 메시지 수", f"{kpi['sent']:,}", _pct_delta(kpi["sent"], kpi_prev["sent"]), "%"),
+        ("클릭률", _fmt_pct(kpi["ctr"]), kpi["ctr"] - kpi_prev["ctr"], "%p"),
+        ("전환율", _fmt_pct(kpi["cvr"]), kpi["cvr"] - kpi_prev["cvr"], "%p"),
+        ("전환 구매금액", _fmt_won(kpi["revenue"]), _pct_delta(kpi["revenue"], kpi_prev["revenue"]), "%"),
+        ("자동화 기여 매출 비중", f"{kpi['auto_share']:.0f}%", kpi["auto_share"] - kpi_prev["auto_share"], "%p"),
     ]
-    for col, (label, value) in zip(cols, items):
+    for col, (label, value, delta, unit) in zip(cols, items):
         with col:
-            _kpi_card(label, value)
+            with st.container(border=True):
+                _kpi_card(label, value, delta, unit)
 
 
 def _render_uplift_cards(uplift: dict):
     """'전환율 증분 (자동화 효과)' / '증분 매출 (자동화 효과)' - Success Matrix 카드."""
     cols = st.columns(2)
     with cols[0]:
-        _kpi_card("전환율 증분 (자동화 효과)", _fmt_pct_signed(uplift["cvr_uplift"]))
+        with st.container(border=True):
+            _kpi_card("전환율 증분 (자동화 효과)", _fmt_pct_signed(uplift["cvr_uplift"]))
     with cols[1]:
         value = "-" if uplift["revenue_uplift"] is None else f"{'+' if uplift['revenue_uplift'] >= 0 else ''}{_fmt_won(uplift['revenue_uplift'])}"
-        _kpi_card("증분 매출 (자동화 효과)", value)
+        with st.container(border=True):
+            _kpi_card("증분 매출 (자동화 효과)", value)
     st.caption(
         "* 자동화를 하지 않았을 때의 예상 수치 대비 늘어난 정도입니다. AB 테스트가 있는 캠페인은 "
         "실제 대조군과 비교한 값, 없는 캠페인은 같은 세그먼트의 다른 캠페인 평균과 비교한 값(참고용)을 "
@@ -169,8 +192,14 @@ def render_performance():
     history_df = load_campaign_history()
     campaign_df = campaign_table(sends_df, history_df, start, end)
 
+    # KPI 비교 기준: 선택 기간 바로 직전의 '같은 길이' 기간 (dashboard/charts.py와 동일한 방식)
+    span_days = (end - start).days + 1
+    prev_end = start - timedelta(days=1)
+    prev_start = prev_end - timedelta(days=span_days - 1)
+
     kpi = kpi_summary(sends_df, start, end)
-    _render_kpis(kpi)
+    kpi_prev = kpi_summary(sends_df, prev_start, prev_end)
+    _render_kpis(kpi, kpi_prev)
 
     st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
     _render_uplift_cards(uplift_summary(campaign_df))
