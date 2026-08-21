@@ -133,8 +133,12 @@ def compute_kpis(cur_orders, cur_events, prev_orders, prev_events):
 
 
 def _kpi_card(label, value_text, delta, unit="%", key=None, ask_question=None):
-    """전월대비 배지가 포함된 텍스트형 KPI 카드. ask_question을 주면 카드 안에
-    'AI 분석하기' 버튼이 같이 뜨고, 누르면 플로팅 챗봇이 열리면서 그 질문으로 바로 분석해준다."""
+    """전월대비 배지가 포함된 텍스트형 KPI 카드. ask_question을 주면 카드 안에 별도
+    버튼을 두는 대신, 카드 전체를 눌렀을 때 플로팅 챗봇이 열리면서 그 질문으로 바로
+    분석해준다 — ai_insights/chatbot.py의 AI_CHAT_CSS가 "click_" 접두사 컨테이너 안의
+    "ask_" 접두사 버튼을 투명하게 카드 전체 크기로 늘려주는 방식이라, 컨테이너/버튼
+    key를 그 접두사 규칙에 맞춰주기만 하면 카드 어디를 눌러도 그 버튼이 눌린 것처럼
+    동작한다(이 파일에서 직접 CSS를 추가할 필요는 없음)."""
     if delta > 0:
         cls, arrow = "trend-up", "▲"
     elif delta < 0:
@@ -142,14 +146,15 @@ def _kpi_card(label, value_text, delta, unit="%", key=None, ask_question=None):
     else:
         cls, arrow = "trend-neutral", ""
     trend_html = f"<span class='trend-pill {cls}'>{arrow} {abs(delta):.1f}{unit}</span>"
-    with st.container(border=True, key=key):
+    container_key = f"click_{key}" if (ask_question and key) else key
+    with st.container(border=True, key=container_key):
         st.markdown(
             f"<div class='stat-card-top'><span class='stat-label'>{label}</span>{trend_html}</div>"
             f"<div class='stat-value'>{value_text}</div>"
             f"<div class='stat-sub'>이전 기간 대비</div>",
             unsafe_allow_html=True,
         )
-        if ask_question and st.button("🤖 이 지표 분석하기", key=f"{key}-ask", use_container_width=True):
+        if ask_question and st.button("이 지표 분석하기", key=f"ask_{key}"):
             from ai_insights.chatbot import ask_chatbot
             ask_chatbot(ask_question)
 
