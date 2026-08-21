@@ -15,6 +15,8 @@ import pandas as pd
 import streamlit as st
 from supabase import create_client
 
+from ab_test.constants import CHANNEL_META
+
 AB_TESTS_COLUMNS = [
     "test_id", "test_name", "segment", "channel", "success_metric", "status",
     "created_at", "ended_at", "winner_group_id",
@@ -36,6 +38,32 @@ METRIC_COUNT_FIELD = {"open": "opens", "click": "clicks", "conversion": "convers
 
 def _get_client():
     return create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_ROLE_KEY"])
+
+
+def _normalize_channel(raw) -> str:
+    """campaign_sends.channel 값이 두 갈래로 갈려서 들어온다 - AB테스트 쪽은 항상
+    내부 키("email"/"kakao"/"sms"/"webpush"/"webpopup")로 저장하는데, 캠페인 만들기
+    탭(다른 팀원 담당)은 화면에 보이는 라벨("이메일", "카카오톡 🟡" 등)을 그대로
+    저장한다. 이 두 표현이 섞여 있으면 CHANNEL_META/click_trackable 조회가 실패해서
+    배지 색이 깨지거나 클릭 추적 가능 여부가 잘못 판정된다. campaign_builder.py의
+    send_campaign_message()가 채널을 분기할 때 쓰는 것과 같은 부분 문자열 매칭으로
+    표준 키로 맞춰준다."""
+    if pd.isna(raw):
+        return raw
+    s = str(raw)
+    if s in CHANNEL_META:
+        return s
+    if "카카오" in s:
+        return "kakao"
+    if "문자" in s or "sms" in s.lower():
+        return "sms"
+    if "웹 푸시" in s or "웹푸시" in s or "push" in s.lower():
+        return "webpush"
+    if "웹 팝업" in s or "웹팝업" in s or "popup" in s.lower():
+        return "webpopup"
+    if "이메일" in s or "email" in s.lower():
+        return "email"
+    return s
 
 
 @st.cache_data(ttl=30, show_spinner="발송 데이터를 불러오는 중...")
@@ -62,6 +90,7 @@ def load_campaign_sends() -> pd.DataFrame:
     for col in ["sent_at", "opened_at", "clicked_at"]:
         df[col] = pd.to_datetime(df[col], errors="coerce", format="ISO8601")
     df["delivered"] = df["delivered"].astype(bool)
+    df["channel"] = df["channel"].map(_normalize_channel)
     return df
 
 
