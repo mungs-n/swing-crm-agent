@@ -22,6 +22,7 @@ from automation.email_sender import (
     save_history,
     save_scheduled_emails,
     load_test_recipients,
+    load_fcm_tokens,
     record_campaign_send,
     KST,
     REPEATING_FREQS,
@@ -101,13 +102,27 @@ if not firebase_admin._apps:
     except Exception:
         pass
 
-def send_web_push(receiver_info: str, message: str, image=None, send_at=None) -> int:
+# 웹 푸시 알림을 클릭했을 때 이동할 기본 주소. .env의 ATHLEPA_SITE_URL로 덮어쓸 수 있다.
+ATHLEPA_SITE_URL = os.environ.get("ATHLEPA_SITE_URL", "https://athlepa-demo.netlify.app/")
+
+def send_web_push(receiver_info: str, message: str, image=None, send_at=None, link: str | None = None) -> int:
     try:
+        target_link = link or ATHLEPA_SITE_URL
         msg = messaging.Message(
             notification=messaging.Notification(
                 title="Athlepa 알림",
                 body=message,
                 image=image
+            ),
+            # webpush.fcm_options.link 를 지정하면, 사용자가 알림을 클릭했을 때
+            # 브라우저가 이 주소를 열어준다 (별도의 notificationclick 핸들러 없이도 동작).
+            webpush=messaging.WebpushConfig(
+                fcm_options=messaging.WebpushFCMOptions(link=target_link),
+                notification=messaging.WebpushNotification(
+                    title="Athlepa 알림",
+                    body=message,
+                    image=image,
+                ),
             ),
             token=receiver_info,
         )
@@ -117,7 +132,7 @@ def send_web_push(receiver_info: str, message: str, image=None, send_at=None) ->
         print("FCM 발송 실패:", e)
         return 500
 
-def send_campaign_message(channel: str, receiver_info: str, subject: str, body: str, image=None, send_at=None, send_id=None) -> int:
+def send_campaign_message(channel: str, receiver_info: str, subject: str, body: str, image=None, send_at=None, send_id=None, link=None) -> int:
     if "카카오톡" in channel:
         full_msg = f"[{subject}]\n\n{body}" if subject else body
         return send_kakaotalk(receiver_info, full_msg, image=image, send_at=send_at)
@@ -126,7 +141,7 @@ def send_campaign_message(channel: str, receiver_info: str, subject: str, body: 
         return send_sms_lms(receiver_info, full_msg, image=image, send_at=send_at)
     elif "웹 푸시" in channel:
         full_msg = f"{subject}\n{body}" if subject else body
-        return send_web_push(receiver_info, full_msg, image=image, send_at=send_at)
+        return send_web_push(receiver_info, full_msg, image=image, send_at=send_at, link=link)
     else:
         # send_id는 SendGrid custom_arg로 실려서, 오픈/클릭 웹훅이 어느 campaign_sends
         # 행을 업데이트할지 찾는 데 쓰인다 (이메일 채널에서만 의미가 있다).
@@ -259,15 +274,15 @@ def get_segment_info(segment_kr: str):
     return user_count, stats
 
 
-def generate_single_copy(segment_kr: str, persona_desc: list, channel: str = "카카오톡 🟡"):
+def generate_single_copy(segment_kr: str, persona_desc: list, channel: str = "카카오톡"):
     channel_guides = {
-        "카카오톡 🟡": "카카오톡 메시지 형식으로 친근하고 가독성 있게 작성하세요. 줄바꿈과 이모지(😊, 🔥 등)를 적극적으로 활용하고, 하단에 행동 유도 버튼 문구를 포함하세요.",
-        "문자(SMS/LMS) 💬": "문자 메시지(SMS/LMS) 형식으로 작성하세요. 99바이트 이내의 짧고 명확한 핵심 위주 문장으로 작성하며 핵심 혜택을 직관적으로 보여주세요.",
-        "웹 푸시 🔔": "웹 브라우저 푸시 알림 형태입니다. 제목은 15자 이내로 극적인 호기심을 유도하고, 본문은 30자 이내의 아주 단문으로 클릭을 유도하도록 작성하세요.",
-        "이메일 ✉️": "이메일 형식으로 클릭을 부르는 서브젝트(제목)와 2~3문장 본문으로 구성하세요. 구체적인 혜택 내용과 Call to Action(행동 유도)을 명확하게 반영하세요.",
+        "카카오톡": "카카오톡 메시지 형식으로 친근하고 가독성 있게 작성하세요. 줄바꿈을 적극적으로 활용해 가독성을 높이고, 하단에 https://athlepa-demo.netlify.app/ 로 이어지는 버튼을 반드시 포함하세요.", 
+        "문자(SMS/LMS)": "문자 메시지(SMS/LMS) 형식으로 작성하세요. 99바이트 이내의 짧고 명확한 핵심 위주 문장으로 작성하며 핵심 혜택을 직관적으로 보여주세요. 하단에 https://athlepa-demo.netlify.app/ 를 반드시 첨부하세요",
+        "웹 푸시": "웹 브라우저 푸시 알림 형태입니다. 제목은 15자 이내로 극적인 호기심을 유도하고, 본문은 30자 이내의 아주 단문으로 클릭을 유도하도록 작성하세요.",
+        "이메일": "이메일 형식으로 클릭을 부르는 서브젝트(제목)와 2~3문장 본문으로 구성하세요. 구체적인 혜택 내용과 Call to Action(행동 유도)을 명확하게 반영하세요. 이메일 내에 https://athlepa-demo.netlify.app/ 링크를 반드시 포함하세요.",
     }
 
-    selected_guide = channel_guides.get(channel, channel_guides["카카오톡 🟡"])
+    selected_guide = channel_guides.get(channel, channel_guides["카카오톡"])
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         yield "ANTHROPIC_API_KEY가 설정되지 않았습니다. .env 파일을 확인해주세요."
@@ -313,7 +328,8 @@ def _step_indicator(current_step):
         done = current_step > num
         active = current_step == num
         circle_cls = "step-circle-active" if (done or active) else "step-circle-pending"
-        mark = "✓" if done else str(num)
+        # 완료된 단계는 원 안의 텍스트 대신 색상(step-circle-active)으로 구분한다.
+        mark = str(num)
         label_cls = "step-label-active" if active else ("step-label-done" if done else "step-label-pending")
         parts.append(
             f"<div class='step-item'><span class='step-circle {circle_cls}'>{mark}</span>"
@@ -329,7 +345,7 @@ def _init_campaign_state():
     defaults = {
         "campaign_step": 1,
         "selected_segment": list(TARGET_OPTIONS.keys())[0],
-        "selected_channel": "카카오톡 🟡",
+        "selected_channel": "카카오톡",
         "editable_copy": "",
         "target_count": 0,
         "generated_copy": "",
@@ -385,7 +401,7 @@ def render_channel_preview(channel: str, message: str, image_file=None):
         return f"""
         <div style="background:#abc0d0; padding:16px 10px; border-radius:24px; max-width:340px; margin:0 auto; font-family:-apple-system, sans-serif;">
             <div style="background:#ffffff; border-radius:12px 12px 0 0; padding:10px 14px; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #f0f0f0;">
-                <span style="font-size:13px; font-weight:bold; color:#191919;">Athlepa <span style="color:#00c73c; font-size:10px;">✔</span></span>
+                <span style="font-size:13px; font-weight:bold; color:#191919;">Athlepa </span>
             </div>
             <div style="background:#ffffff; border-radius:0 0 16px 16px; overflow:hidden; padding:14px;">
                 <div style="font-size:15px; font-weight:bold; color:#111; margin-bottom:8px;">{subject or '알림'}</div>
@@ -460,8 +476,12 @@ def inject_custom_css():
             gap: 6px;
         }
         .confirm-box .dot {
-            color: #047857;
-            font-weight: bold;
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #047857;
+            flex-shrink: 0;
         }
         </style>
         """,
@@ -491,12 +511,12 @@ def _render_step1():
             option_info = TARGET_OPTIONS[selected_segment]
             real_count, _ = get_segment_info(selected_segment)
             st.session_state["target_count"] = real_count
-            st.caption(f"🎯 대상 인원: **{real_count}명**")
+            st.caption(f"대상 인원: **{real_count}명**")
 
             st.markdown("<div style='margin-top: 12px;'></div>", unsafe_allow_html=True)
 
-            channel_options = ["카카오톡 🟡", "문자(SMS/LMS) 💬", "웹 푸시 🔔", "이메일 ✉️"]
-            ch_index = channel_options.index(st.session_state.get("selected_channel", "카카오톡 🟡"))
+            channel_options = ["카카오톡", "문자(SMS/LMS)", "웹 푸시", "이메일"]
+            ch_index = channel_options.index(st.session_state.get("selected_channel", "카카오톡"))
             selected_channel = st.radio(
                 "발송 채널 선택",
                 options=channel_options,
@@ -507,13 +527,21 @@ def _render_step1():
 
             st.markdown("<div style='margin-top: 16px;'></div>", unsafe_allow_html=True)
 
-            generate_btn = st.button(
-                "채널 맞춤 카피 자동 생성", 
-                icon=":material/auto_awesome:",
-                type="primary", 
-                use_container_width=True,
-                key="btn_generate_copy"
-            )
+            gen_col1, gen_col2 = st.columns(2)
+            with gen_col1:
+                generate_btn = st.button(
+                    "AI 카피 자동 생성",
+                    type="primary",
+                    use_container_width=True,
+                    key="btn_generate_copy"
+                )
+            with gen_col2:
+                direct_write_btn = st.button(
+                    "직접 작성하기",
+                    type="secondary",
+                    use_container_width=True,
+                    key="btn_direct_write"
+                )
 
     # --- 오른쪽: 카피 결과 ---
     with col_right:
@@ -521,6 +549,10 @@ def _render_step1():
             st.markdown(f"<p style='font-size:0.95rem; font-weight:700; margin-bottom: 12px;'>생성된 메시지 ({selected_channel})</p>", unsafe_allow_html=True)
             
             area_placeholder = st.empty()
+
+            if direct_write_btn:
+                st.session_state["campaign_editing"] = True
+                st.rerun()
 
             if generate_btn:
                 full_response = ""
@@ -540,6 +572,7 @@ def _render_step1():
             else:
                 message = st.session_state.get("editable_copy", "")
                 if st.session_state["campaign_editing"]:
+                    st.caption("'제목: ...' / '본문: ...' 형식으로 작성하면 채널 형식에 맞춰 자동으로 반영됩니다.")
                     edited = area_placeholder.text_area(
                         "발송 메시지", 
                         value=message, 
@@ -553,7 +586,7 @@ def _render_step1():
                     with area_placeholder:
                         st.markdown(
                             f"<div class='message-preview'>"
-                            f"{message if message else '세그먼트와 채널을 고른 후 [카피 자동 생성] 버튼을 누르면 채널에 최적화된 메시지가 작성됩니다.'}</div>",
+                            f"{message if message else '세그먼트와 채널을 고른 후 [AI 카피 자동 생성]을 누르거나, [직접 작성하기]로 메시지를 바로 작성할 수 있습니다.'}</div>",
                             unsafe_allow_html=True,
                         )
 
@@ -575,8 +608,6 @@ def _render_step1():
 
             if st.button(
                 "다음 단계 (발송 방식 설정)", 
-                icon=":material/arrow_forward:", 
-                icon_position="right",
                 type="primary", 
                 use_container_width=True,
                 disabled=not st.session_state.get("editable_copy", "").strip(),
@@ -624,7 +655,7 @@ def _render_step2():
 
                     if send_freq in ("매일 발송", "3일마다", "일주일마다"):
                         interval_label = {"매일 발송": "매일", "3일마다": "3일", "일주일마다": "일주일"}[send_freq]
-                        st.caption(f"⏱️ 선택한 날짜부터 {interval_label} 간격으로 반복 발송됩니다.")
+                        st.caption(f"선택한 날짜부터 {interval_label} 간격으로 반복 발송됩니다.")
 
                     elif send_freq == "특정 요일 반복":
                         selected_labels = st.multiselect(
@@ -642,11 +673,27 @@ def _render_step2():
                             WEEKDAY_LABELS.index(label) for label in selected_labels
                         ]
                         if not selected_labels:
-                            st.caption("⚠️ 반복할 요일을 1개 이상 선택해주세요.")
+                            st.caption("반복할 요일을 1개 이상 선택해주세요.")
                         else:
-                            st.caption(f"⏱️ 매주 {', '.join(selected_labels)}요일마다 반복 발송됩니다.")
+                            st.caption(f"매주 {', '.join(selected_labels)}요일마다 반복 발송됩니다.")
             elif trigger_type == "이벤트 트리거 기반":
-                st.selectbox("트리거 이벤트", ["장바구니 담기 후 미구매", "회원가입 완료", "첫 구매 완료"])
+                st.selectbox(
+                    "트리거 이벤트",
+                    [
+                        "장바구니 담기 후 미구매",
+                        "위시리스트 등록 후 미구매",
+                        "회원가입 완료",
+                        "첫 구매 완료",
+                        "재구매 주기 도래",
+                        "리뷰 작성 요청 (배송 완료 후)",
+                        "생일/기념일",
+                        "회원 등급 승급",
+                        "포인트 소멸 임박",
+                        "관심 상품 재입고",
+                        "관심 상품 가격 인하",
+                        "장기 미접속 (휴면 전환 예정)",
+                    ],
+                )
             else:
                 st.text_input("API Endpoint Key", value="api_v1_campaign_trigger")
 
@@ -657,8 +704,8 @@ def _render_step2():
 
     with col_right:
         with st.container(border=True):
-            channel = st.session_state.get("selected_channel", "카카오톡 🟡")
-            st.markdown(f"<p style='font-size:0.95rem; font-weight:700; margin-bottom:12px;'>📱 실시간 미리보기 ({channel})</p>", unsafe_allow_html=True)
+            channel = st.session_state.get("selected_channel", "카카오톡")
+            st.markdown(f"<p style='font-size:0.95rem; font-weight:700; margin-bottom:12px;'>실시간 미리보기 ({channel})</p>", unsafe_allow_html=True)
             
             message = st.session_state.get("editable_copy", "")
             img = st.session_state.get("campaign_image")
@@ -669,18 +716,18 @@ def _render_step2():
     st.markdown("<div style='margin-top: 16px;'></div>", unsafe_allow_html=True)
     bcol1, bcol2 = st.columns(2)
     with bcol1:
-        if st.button("이전 단계", icon=":material/arrow_back:", use_container_width=True, key="btn_step2_prev"):
+        if st.button("이전 단계", use_container_width=True, key="btn_step2_prev"):
             st.session_state["campaign_step"] = 1
             st.rerun()
     with bcol2:
-        if st.button("다음 단계 (최종 확인)", icon=":material/arrow_forward:", icon_position="right", type="primary", use_container_width=True, key="btn_step2_next"):
+        if st.button("다음 단계 (최종 확인)", type="primary", use_container_width=True, key="btn_step2_next"):
             st.session_state["campaign_step"] = 3
             st.rerun()
 
 
 def _render_step3():
     segment = st.session_state["selected_segment"]
-    channel = st.session_state.get("selected_channel", "카카오톡 🟡")
+    channel = st.session_state.get("selected_channel", "카카오톡")
     count = st.session_state["target_count"]
     message = st.session_state.get("editable_copy", "")
     send_date = st.session_state.get("schedule_date", datetime.now().date())
@@ -722,7 +769,12 @@ def _render_step3():
             st.markdown("<p style='font-size:0.95rem; font-weight:700; margin-bottom:12px;'>테스트 발송</p>", unsafe_allow_html=True)
             st.caption("실제 발송 전 테스트 수신자로 발송해 보세요.")
             
-            placeholder_text = "휴대폰 번호 입력" if ("카카오톡" in channel or "문자" in channel) else "수신자 주소/ID 입력"
+            if "카카오톡" in channel or "문자" in channel:
+                placeholder_text = "휴대폰 번호 입력"
+            elif "웹 푸시" in channel:
+                placeholder_text = "FCM 토큰 입력 (data/fcm_tokens.csv에서 확인 가능)"
+            else:
+                placeholder_text = "수신자 주소/ID 입력"
             test_receiver = st.text_input("수신자 정보", placeholder=placeholder_text, key="test_receiver_input", label_visibility="visible")
             
             if st.button("테스트 발송", use_container_width=True, key="btn_test_send"):
@@ -736,7 +788,7 @@ def _render_step3():
 
                         if status in [200, 202]:
                             st.markdown(
-                                f"<div class='confirm-box'><span class='dot'>✓</span>"
+                                f"<div class='confirm-box'><span class='dot'></span>"
                                 f"<span style='font-size:12px;color:#047857'>[{channel}] 테스트 메시지가 발송되었습니다.</span></div>",
                                 unsafe_allow_html=True,
                             )
@@ -770,7 +822,7 @@ def _render_step3():
             if st.session_state["campaign_full_sent"]:
                 done_label = "반복 발송이 등록되었습니다." if is_repeating else "발송 완료 — 캠페인이 성공적으로 등록되었습니다."
                 st.markdown(
-                    "<div class='confirm-box'><span class='dot'>✓</span>"
+                    "<div class='confirm-box'><span class='dot'></span>"
                     f"<span style='font-size:12px;color:#047857'>{done_label}</span></div>",
                     unsafe_allow_html=True,
                 )
@@ -780,7 +832,6 @@ def _render_step3():
 
                 if st.button(
                     button_label,
-                    icon=":material/rocket_launch:",
                     type="primary",
                     use_container_width=True,
                     disabled=not weekday_ready,
@@ -808,9 +859,17 @@ def _render_step3():
                         )
                         st.rerun()
                     else:
-                        recipients = load_test_recipients()
+                        # 채널에 따라 수신자 소스가 다르다: 웹 푸시는 사이트 방문자의
+                        # FCM 토큰(data/fcm_tokens.csv), 나머지는 전화번호/이메일
+                        # (data/test_recipients.csv).
+                        is_web_push = "웹 푸시" in channel
+                        recipients = load_fcm_tokens() if is_web_push else load_test_recipients()
+
                         if recipients.empty:
-                            st.warning("data/test_recipients.csv 에 등록된 테스트 수신자가 없습니다.")
+                            if is_web_push:
+                                st.warning("data/fcm_tokens.csv 에 등록된 웹 푸시 토큰이 없습니다. 사이트에 방문해서 알림을 허용한 사용자가 있어야 발송할 수 있어요.")
+                            else:
+                                st.warning("data/test_recipients.csv 에 등록된 테스트 수신자가 없습니다.")
                         else:
                             is_immediate = send_freq == "즉시 발송"
 
@@ -830,7 +889,7 @@ def _render_step3():
                             succeeded_sends = []  # (target_info, send_id) - 즉시 발송 성공분만. campaign_history 행이 생긴 뒤에 기록한다 (FK)
 
                             for _, row in recipients.iterrows():
-                                target_info = row.get("phone", row.get("email", ""))
+                                target_info = row.get("token", "") if is_web_push else row.get("phone", row.get("email", ""))
                                 try:
                                     send_id = str(uuid.uuid4())
                                     status = send_campaign_message(
@@ -875,7 +934,7 @@ def _render_step3():
     st.markdown("<div style='margin-top: 16px;'></div>", unsafe_allow_html=True)
     bcol1, _ = st.columns([1, 1])
     with bcol1:
-        if st.button("이전 단계 (발송 방식 설정)", icon=":material/arrow_back:", use_container_width=True, key="btn_step3_prev"):
+        if st.button("이전 단계 (발송 방식 설정)", use_container_width=True, key="btn_step3_prev"):
             st.session_state["campaign_full_sent"] = False
             st.session_state["campaign_step"] = 2
             st.rerun()

@@ -28,6 +28,7 @@ TEST_RECIPIENTS_FILE = "data/test_recipients.csv"
 SCHEDULED_FILE = "data/scheduled_emails.csv"
 RECURRING_FILE = "data/recurring_campaigns.csv"
 CAMPAIGN_ASSET_DIR = "data/campaign_assets"
+FCM_TOKENS_FILE = "data/fcm_tokens.csv"
 
 WEEKDAY_LABELS = ["월", "화", "수", "목", "금", "토", "일"]  # Python weekday(): 월=0 ... 일=6
 REPEATING_FREQS = {"매일 발송", "3일마다", "일주일마다", "특정 요일 반복"}
@@ -48,6 +49,47 @@ def load_test_recipients():
     except UnicodeDecodeError:
         # 엑셀에서 저장하면 한글 Windows 기본 인코딩(CP949)으로 저장되는 경우가 있음
         return pd.read_csv(TEST_RECIPIENTS_FILE, encoding="cp949")
+
+
+# ==============================================================================
+# 웹 푸시(FCM) 토큰 저장/조회
+#
+# 웹사이트(index.html)의 FCM 등록 스크립트가 토큰을 발급받으면, 별도로 띄운
+# token_api.py 서버의 /api/fcm-token 엔드포인트로 전송한다. 그 서버가 이 함수를
+# 호출해서 data/fcm_tokens.csv 에 저장하고, 캠페인 관리 화면에서 "웹 푸시" 채널을
+# 고르면 이 파일에 쌓인 토큰들이 발송 대상이 된다.
+# ==============================================================================
+
+def save_fcm_token(token: str, user_id: str = "") -> None:
+    """같은 토큰이 이미 저장돼 있으면 등록 시각만 갱신하고(중복 행 방지),
+    처음 보는 토큰이면 새로 추가한다."""
+    token = (token or "").strip()
+    if not token:
+        return
+
+    try:
+        df = pd.read_csv(FCM_TOKENS_FILE, encoding="utf-8-sig")
+    except FileNotFoundError:
+        df = pd.DataFrame(columns=["token", "user_id", "등록일시"])
+
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    if not df.empty and token in df["token"].astype(str).values:
+        df.loc[df["token"] == token, "등록일시"] = now_str
+        if user_id:
+            df.loc[df["token"] == token, "user_id"] = user_id
+    else:
+        new_row = pd.DataFrame([{"token": token, "user_id": user_id, "등록일시": now_str}])
+        df = pd.concat([df, new_row], ignore_index=True)
+
+    os.makedirs(os.path.dirname(FCM_TOKENS_FILE), exist_ok=True)
+    df.to_csv(FCM_TOKENS_FILE, index=False, encoding="utf-8-sig")
+
+
+def load_fcm_tokens() -> pd.DataFrame:
+    try:
+        return pd.read_csv(FCM_TOKENS_FILE, encoding="utf-8-sig")
+    except FileNotFoundError:
+        return pd.DataFrame(columns=["token", "user_id", "등록일시"])
 
 
 def send_email(
@@ -116,7 +158,7 @@ def save_history(segment, copy, count, status, approval_mode="자동실행", cam
         "세그먼트": segment,
         "대상 인원": count,
         # 예전엔 여기서 copy[:50] + "..." 로 잘라서 저장했는데, 그러면 나중에
-        # "캠페인 이름 클릭 → 상세 내용 보기" 같은 걸 할 때 원본 내용이 없어서
+        # "캠페인 이름 클릭 -> 상세 내용 보기" 같은 걸 할 때 원본 내용이 없어서
         # 다시 보여줄 수가 없었다. 목록 화면에서 길게 보이는 건 CSS로 줄여서
         # 표시하면 되니, 저장은 항상 전체 내용으로 한다.
         "메시지 요약": message_summary,
@@ -371,17 +413,21 @@ def _run_due_recurring_campaigns() -> None:
     if not due_mask.any():
         return
 
-    try:
-        recipients = load_test_recipients()
-    except Exception:
-        recipients = pd.DataFrame()
-
     for idx in df[due_mask].index:
         row = df.loc[idx]
         channel = row["channel"]
         subject = row["subject"]
         body = row["body"]
         image_path = str(row.get("image_path", "") or "")
+
+        # 채널에 따라 수신자 소스가 다르다: 웹 푸시는 FCM 토큰, 나머지는 전화번호/이메일.
+        try:
+            if "웹 푸시" in channel:
+                recipients = load_fcm_tokens()
+            else:
+                recipients = load_test_recipients()
+        except Exception:
+            recipients = pd.DataFrame()
 
         image_file = None
         if image_path and os.path.exists(image_path):
@@ -393,7 +439,10 @@ def _run_due_recurring_campaigns() -> None:
         success_count, fail_count = 0, 0
         try:
             for _, r in recipients.iterrows():
-                target_info = r.get("phone", r.get("email", ""))
+                if "웹 푸시" in channel:
+                    target_info = r.get("token", "")
+                else:
+                    target_info = r.get("phone", r.get("email", ""))
                 try:
                     status = send_campaign_message(channel, target_info, subject, body, image=image_file)
                     if status in (200, 202):
@@ -437,7 +486,6 @@ def _start_scheduler():
         st.warning(
             "반복 발송 기능을 쓰려면 APScheduler 패키지가 필요해요. "
             "터미널에서 `pip install apscheduler` 실행 후 앱을 다시 시작해주세요.",
-            icon="⚠️",
         )
         return None
 
@@ -465,7 +513,7 @@ def render_recurring_campaigns_panel() -> None:
     """지금 돌고 있는 반복 캠페인을 보여주고, 일시정지/재개/삭제할 수 있게 한다."""
     df = load_recurring_campaigns()
 
-    with st.expander("🔁 반복 발송 관리", expanded=False):
+    with st.expander("반복 발송 관리", expanded=False):
         if df.empty:
             st.caption("등록된 반복 캠페인이 없습니다.")
             return
@@ -478,7 +526,8 @@ def render_recurring_campaigns_panel() -> None:
                 weekday_str = " · " + ", ".join(WEEKDAY_LABELS[i] for i in idxs)
 
             active = bool(row["active"])
-            status_label = "🟢 진행 중" if active else "⏸️ 일시정지"
+            dot_color = "#22C55E" if active else "#9CA3AF"
+            status_label = "진행 중" if active else "일시정지"
 
             c1, c2, c3, c4 = st.columns([3, 2, 1, 1])
             with c1:
@@ -488,7 +537,12 @@ def render_recurring_campaigns_panel() -> None:
                     f"다음 발송: {row['next_run']} · 누적 {int(row['send_count'] or 0)}회"
                 )
             with c2:
-                st.caption(status_label)
+                st.markdown(
+                    f"<span style='display:inline-block;width:7px;height:7px;border-radius:50%;"
+                    f"background:{dot_color};margin-right:6px;'></span>"
+                    f"<span style='font-size:0.85rem;color:#374151;'>{status_label}</span>",
+                    unsafe_allow_html=True,
+                )
             with c3:
                 toggle_label = "일시정지" if active else "재개"
                 if st.button(toggle_label, key=f"toggle_{row['id']}", use_container_width=True):
