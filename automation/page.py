@@ -3,10 +3,8 @@ import pandas as pd
 
 import math
 
-from ab_test.page import render_ab_test
 from automation.campaign_builder import render_campaign_builder
 from automation.email_sender import get_scheduler, render_recurring_campaigns_panel
-from performance.page import render_performance
 
 HISTORY_FILE = "data/campaign_history.csv"
 
@@ -375,39 +373,28 @@ def render_campaign_table(search_text: str = ""):
         )
 
 
-st.title("캠페인 자동화")
+col_title, col_btn = st.columns([4, 1])
+with col_title:
+    st.subheader("캠페인 관리")
 
-tab_manage, tab_ab, tab_perf = st.tabs(["캠페인 관리", "A/B 테스트", "퍼포먼스 대시보드"])
+with col_btn:
+    if st.button("+ 캠페인 생성하기", type="primary", use_container_width=True):
+        st.session_state["show_campaign_builder"] = True
 
-with tab_manage:
-    col_title, col_btn = st.columns([4, 1])
-    with col_title:
-        st.subheader("캠페인 관리")
+# 검색 바
+search_text = st.text_input(
+    "검색", placeholder="캠페인명 또는 키워드 검색", label_visibility="collapsed"
+)
 
-    with col_btn:
-        if st.button("+ 캠페인 생성하기", type="primary", use_container_width=True):
-            st.session_state["show_campaign_builder"] = True
+# 캠페인 생성 모달/화면 전환 처리
+if st.session_state.get("show_campaign_builder", False):
+    with st.expander("신규 캠페인 생성하기", expanded=True):
+        render_campaign_builder()
+        if st.button("닫기"):
+            st.session_state["show_campaign_builder"] = False
+            st.rerun()
 
-    # 검색 바
-    search_text = st.text_input(
-        "검색", placeholder="캠페인명 또는 키워드 검색", label_visibility="collapsed"
-    )
+render_campaign_table(search_text=search_text)
 
-    # 캠페인 생성 모달/화면 전환 처리
-    if st.session_state.get("show_campaign_builder", False):
-        with st.expander("신규 캠페인 생성하기", expanded=True):
-            render_campaign_builder()
-            if st.button("닫기"):
-                st.session_state["show_campaign_builder"] = False
-                st.rerun()
-
-    render_campaign_table(search_text=search_text)
-
-    # 반복 발송 캠페인 목록 (일시정지/삭제)
-    render_recurring_campaigns_panel()
-
-with tab_ab:
-    render_ab_test()
-
-with tab_perf:
-    render_performance()
+# 반복 발송 캠페인 목록 (일시정지/삭제)
+render_recurring_campaigns_panel()
