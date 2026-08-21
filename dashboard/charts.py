@@ -176,13 +176,16 @@ def render_kpi_cards(orders, events, prev_orders, prev_events):
 
 
 def render_gmv_chart(orders, granularity="월별"):
-    """GMV & 주문 수 추이 콤보 차트 (상단 전역 필터의 기간/단위를 그대로 사용, 최신 구간만 강조색)"""
+    """GMV & 주문 수 추이 콤보 차트 (상단 전역 필터의 기간/단위를 그대로 사용, 최신 구간만 강조색).
+    이 차트는 마우스 오버 툴팁(구간별 정확한 값 확인)이 유용해서, 카드 전체 클릭 대신
+    제목 옆에 작은 '분석하기' 버튼만 남겨 차트 자체의 hover/확대 기능은 그대로 살려둔다."""
     if orders.empty:
-        st.subheader(
-            "GMV & 주문 수 추이",
-            help="막대는 구간별 GMV(총매출), 선은 주문 건수예요. 진한 보라 막대는 가장 최근 구간이고 나머지는 이전 구간이에요.",
-        )
-        st.info("선택한 기간에 데이터가 없습니다.")
+        with st.container(border=True):
+            st.subheader(
+                "GMV & 주문 수 추이",
+                help="막대는 구간별 GMV(총매출), 선은 주문 건수예요. 진한 보라 막대는 가장 최근 구간이고 나머지는 이전 구간이에요.",
+            )
+            st.info("선택한 기간에 데이터가 없습니다.")
         return
 
     freq = {"일별": "D", "주별": "W", "월별": "ME"}[granularity]
@@ -198,39 +201,46 @@ def render_gmv_chart(orders, granularity="월별"):
     grouped["label"] = grouped["order_date"].dt.strftime(label_fmt)
     bar_colors = [ACCENT if i == len(grouped) - 1 else PALE_PURPLE for i in range(len(grouped))]
 
-    st.subheader(
-        "GMV & 주문 수 추이",
-        help="막대는 구간별 GMV(총매출), 선은 주문 건수예요. 진한 보라 막대는 가장 최근 구간이고 나머지는 이전 구간이에요.",
-    )
+    with st.container(border=True):
+        col_title, col_btn = st.columns([6, 1])
+        with col_title:
+            st.subheader(
+                "GMV & 주문 수 추이",
+                help="막대는 구간별 GMV(총매출), 선은 주문 건수예요. 진한 보라 막대는 가장 최근 구간이고 나머지는 이전 구간이에요.",
+            )
+        with col_btn:
+            if st.button("🤖", key="ask-chart-gmv-trend", help="이 차트를 AI에게 분석해달라고 요청"):
+                from ai_insights.chatbot import ask_chatbot
+                ask_chatbot("GMV와 주문 수 추이를 분석해줘")
 
-    fig = go.Figure()
-    fig.add_bar(
-        x=grouped["label"], y=grouped["gmv"], name="GMV", marker_color=bar_colors,
-        hovertemplate="%{x}<br>GMV " + currency_symbol + "%{y:,.0f}<extra></extra>",
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=grouped["label"],
-            y=grouped["order_count"],
-            name="주문 수",
-            mode="lines+markers",
-            yaxis="y2",
-            line=dict(color=ORANGE, width=2, dash="dash"),
-            marker=dict(size=6, color=ORANGE),
-            hovertemplate="%{x}<br>주문 %{y:,}건<extra></extra>",
+        fig = go.Figure()
+        fig.add_bar(
+            x=grouped["label"], y=grouped["gmv"], name="GMV", marker_color=bar_colors,
+            hovertemplate="%{x}<br>GMV " + currency_symbol + "%{y:,.0f}<extra></extra>",
         )
-    )
-    fig.update_layout(
-        height=260,
-        yaxis=dict(title=f"GMV ({currency_symbol})", gridcolor="#F0EDFB"),
-        yaxis2=dict(title="주문 수", overlaying="y", side="right"),
-        xaxis=dict(showgrid=False),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
-        margin=dict(t=30),
-        plot_bgcolor="rgba(0,0,0,0)",
-        hovermode="x unified",
-    )
-    st.plotly_chart(fig, width='stretch')
+        fig.add_trace(
+            go.Scatter(
+                x=grouped["label"],
+                y=grouped["order_count"],
+                name="주문 수",
+                mode="lines+markers",
+                yaxis="y2",
+                line=dict(color=ORANGE, width=2, dash="dash"),
+                marker=dict(size=6, color=ORANGE),
+                hovertemplate="%{x}<br>주문 %{y:,}건<extra></extra>",
+            )
+        )
+        fig.update_layout(
+            height=260,
+            yaxis=dict(title=f"GMV ({currency_symbol})", gridcolor="#F0EDFB"),
+            yaxis2=dict(title="주문 수", overlaying="y", side="right"),
+            xaxis=dict(showgrid=False),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+            margin=dict(t=30),
+            plot_bgcolor="rgba(0,0,0,0)",
+            hovermode="x unified",
+        )
+        st.plotly_chart(fig, width='stretch')
 
 
 def _mask_name(value):
@@ -269,57 +279,61 @@ def _data_view_button(data, label="원본 데이터 보기"):
             st.dataframe(_mask_sensitive(data), width=850, hide_index=True)
 
 
-def _render_ranked_bars(title, series, colors=None, value_fmt=None, icon=None, ask_question=None):
+def _render_ranked_bars(title, series, colors=None, value_fmt=None, icon=None, ask_question=None, key=None):
     """랭킹형 가로 막대 리스트 (라벨-막대-값 순, 값 큰 순 정렬). colors 미지정 시 1위만 강조색.
-    ask_question을 주면 차트 밑에 'AI 분석하기' 버튼이 같이 뜬다."""
-    st.markdown(
-        f"<div style='display:flex;align-items:center;gap:8px;margin-bottom:4px'>{icon or ''}"
-        f"<span style='font-size:0.85rem;font-weight:600'>{title}</span></div>",
-        unsafe_allow_html=True,
-    )
-
-    if series.empty or series.sum() == 0:
-        st.info("표시할 데이터가 없습니다.")
-        return
-
-    data = series.sort_values(ascending=False)
-    if isinstance(colors, dict):
-        bar_colors = [colors[k] for k in data.index]
-    else:
-        bar_colors = [ACCENT] + [PALE_PURPLE] * (len(data) - 1)
-    data = data.iloc[::-1]
-    bar_colors = bar_colors[::-1]
-
-    fmt = value_fmt or fmt_amount
-    text = [fmt(v) for v in data.values]
-
-    fig = go.Figure(
-        go.Bar(
-            x=data.values,
-            y=data.index.astype(str),
-            orientation="h",
-            marker_color=bar_colors,
-            text=text,
-            textposition="outside",
-            cliponaxis=False,
-            hovertemplate="%{y}: %{text}<extra></extra>",
+    ask_question과 key를 같이 주면 카드 전체가 테두리로 감싸지고, 카드 아무 곳이나 클릭해도
+    그 질문으로 플로팅 챗봇이 열린다 (KPI 카드와 동일한 click_/ask_ 접두사 컨벤션 재사용,
+    hover로 값 보는 기능은 카드를 누르는 순간 대신 잃게 되는 트레이드오프를 감수함)."""
+    container = st.container(border=True, key=f"click_{key}") if (ask_question and key) else st.container()
+    with container:
+        st.markdown(
+            f"<div style='display:flex;align-items:center;gap:8px;margin-bottom:4px'>{icon or ''}"
+            f"<span style='font-size:0.85rem;font-weight:600'>{title}</span></div>",
+            unsafe_allow_html=True,
         )
-    )
-    fig.update_layout(
-        height=26 * len(data) + 34,
-        margin=dict(l=10, r=70, t=10, b=10),
-        xaxis=dict(visible=False, range=[0, data.values.max() * 1.2]),
-        plot_bgcolor="rgba(0,0,0,0)",
-    )
-    st.plotly_chart(fig, width='stretch')
 
-    if ask_question and st.button("🤖 이 차트 분석하기", key=f"ask-{title}", use_container_width=True):
-        from ai_insights.chatbot import ask_chatbot
-        ask_chatbot(ask_question)
+        if series.empty or series.sum() == 0:
+            st.info("표시할 데이터가 없습니다.")
+            return
+
+        data = series.sort_values(ascending=False)
+        if isinstance(colors, dict):
+            bar_colors = [colors[k] for k in data.index]
+        else:
+            bar_colors = [ACCENT] + [PALE_PURPLE] * (len(data) - 1)
+        data = data.iloc[::-1]
+        bar_colors = bar_colors[::-1]
+
+        fmt = value_fmt or fmt_amount
+        text = [fmt(v) for v in data.values]
+
+        fig = go.Figure(
+            go.Bar(
+                x=data.values,
+                y=data.index.astype(str),
+                orientation="h",
+                marker_color=bar_colors,
+                text=text,
+                textposition="outside",
+                cliponaxis=False,
+                hovertemplate="%{y}: %{text}<extra></extra>",
+            )
+        )
+        fig.update_layout(
+            height=26 * len(data) + 34,
+            margin=dict(l=10, r=70, t=10, b=10),
+            xaxis=dict(visible=False, range=[0, data.values.max() * 1.2]),
+            plot_bgcolor="rgba(0,0,0,0)",
+        )
+        st.plotly_chart(fig, width='stretch')
+
+        if ask_question and key and st.button("이 차트 분석하기", key=f"ask_{key}"):
+            from ai_insights.chatbot import ask_chatbot
+            ask_chatbot(ask_question)
 
 
 def render_gender_split(users):
-    """성별 분포 (도넛 차트 옆에 남녀 비율 텍스트를 나란히 배치)"""
+    """성별 분포 (도넛 차트 옆에 남녀 비율 텍스트를 나란히 배치). 카드 전체 클릭 시 챗봇 연동."""
     counts = users["gender"].value_counts()
     male = int(counts.get("M", 0))
     female = int(counts.get("F", 0))
@@ -328,40 +342,45 @@ def render_gender_split(users):
         st.info("표시할 데이터가 없습니다.")
         return
 
-    st.markdown(
-        "<div style='font-size:0.85rem;font-weight:600;margin-bottom:4px'>성별 분포</div>",
-        unsafe_allow_html=True,
-    )
-
-    col_chart, col_labels = st.columns([1, 1])
-    with col_chart:
-        fig = go.Figure(
-            go.Pie(
-                values=[male, female],
-                labels=["남성", "여성"],
-                hole=0.55,
-                rotation=90,
-                sort=False,
-                marker=dict(colors=[MALE_COLOR, FEMALE_COLOR], line=dict(color="white", width=2)),
-                textinfo="none",
-                hovertemplate="%{label}: %{value}명 (%{percent})<extra></extra>",
-                showlegend=False,
-            )
-        )
-        fig.update_layout(height=130, margin=dict(t=10, b=10, l=10, r=10))
-        st.plotly_chart(fig, width='stretch', config={"displayModeBar": False})
-    with col_labels:
+    with st.container(border=True, key="click_chart-gender"):
         st.markdown(
-            "<div style='display:flex;flex-direction:column;justify-content:center;height:130px;gap:14px'>"
-            f"<div><span style='color:{MALE_COLOR};font-weight:700'>남성</span><br>"
-            f"<span style='font-size:1.3rem;font-weight:700'>{male:,}명</span> "
-            f"<span style='color:#868E96'>({male / total * 100:.0f}%)</span></div>"
-            f"<div><span style='color:{FEMALE_COLOR};font-weight:700'>여성</span><br>"
-            f"<span style='font-size:1.3rem;font-weight:700'>{female:,}명</span> "
-            f"<span style='color:#868E96'>({female / total * 100:.0f}%)</span></div>"
-            "</div>",
+            "<div style='font-size:0.85rem;font-weight:600;margin-bottom:4px'>성별 분포</div>",
             unsafe_allow_html=True,
         )
+
+        col_chart, col_labels = st.columns([1, 1])
+        with col_chart:
+            fig = go.Figure(
+                go.Pie(
+                    values=[male, female],
+                    labels=["남성", "여성"],
+                    hole=0.55,
+                    rotation=90,
+                    sort=False,
+                    marker=dict(colors=[MALE_COLOR, FEMALE_COLOR], line=dict(color="white", width=2)),
+                    textinfo="none",
+                    hovertemplate="%{label}: %{value}명 (%{percent})<extra></extra>",
+                    showlegend=False,
+                )
+            )
+            fig.update_layout(height=130, margin=dict(t=10, b=10, l=10, r=10))
+            st.plotly_chart(fig, width='stretch', config={"displayModeBar": False})
+        with col_labels:
+            st.markdown(
+                "<div style='display:flex;flex-direction:column;justify-content:center;height:130px;gap:14px'>"
+                f"<div><span style='color:{MALE_COLOR};font-weight:700'>남성</span><br>"
+                f"<span style='font-size:1.3rem;font-weight:700'>{male:,}명</span> "
+                f"<span style='color:#868E96'>({male / total * 100:.0f}%)</span></div>"
+                f"<div><span style='color:{FEMALE_COLOR};font-weight:700'>여성</span><br>"
+                f"<span style='font-size:1.3rem;font-weight:700'>{female:,}명</span> "
+                f"<span style='color:#868E96'>({female / total * 100:.0f}%)</span></div>"
+                "</div>",
+                unsafe_allow_html=True,
+            )
+
+        if st.button("이 분포 분석하기", key="ask_chart-gender"):
+            from ai_insights.chatbot import ask_chatbot
+            ask_chatbot("성별 분포를 분석해줘")
 
 
 def render_age_brackets(users):
@@ -372,6 +391,8 @@ def render_age_brackets(users):
         "연령대 분포", counts,
         value_fmt=lambda v: f"{v:,.0f}명",
         icon=AGE_ICON_SVG.format(color=ACCENT),
+        ask_question="연령대별 고객 분포를 분석해줘",
+        key="ranked-age",
     )
 
 
@@ -379,7 +400,10 @@ def render_persona_ranking(users):
     """페르소나별 고객 수 랭킹"""
     counts = users["persona_type"].value_counts()
     counts.index = counts.index.map(PERSONA_KR)
-    _render_ranked_bars("페르소나별 고객 수", counts, value_fmt=lambda v: f"{v:,.0f}명", ask_question="페르소나별 고객 수를 분석해줘")
+    _render_ranked_bars(
+        "페르소나별 고객 수", counts, value_fmt=lambda v: f"{v:,.0f}명",
+        ask_question="페르소나별 고객 수를 분석해줘", key="ranked-persona",
+    )
 
 
 def render_customer_profile(users, events):
@@ -448,45 +472,49 @@ def render_segment_ranking(orders):
     """세그먼트별 매출 기여도 랭킹 (VIP / 충성 / 이탈위험 / 휴면)"""
     rfm = assign_segment(calculate_rfm(orders.copy()))
     gmv_by_segment = rfm.groupby("segment")["Monetary"].sum().reindex(SEGMENT_ORDER).fillna(0)
-    _render_ranked_bars("세그먼트별 매출", gmv_by_segment, colors=SEGMENT_COLORS, ask_question="세그먼트별 매출을 분석해줘")
+    _render_ranked_bars(
+        "세그먼트별 매출", gmv_by_segment, colors=SEGMENT_COLORS,
+        ask_question="세그먼트별 매출을 분석해줘", key="ranked-segment",
+    )
 
 
 def render_category_ranking(orders):
-    """카테고리별 매출 랭킹 (항목이 많아 세로 막대로 넓게 표시)"""
-    st.markdown(
-        "<span style='font-size:0.85rem;font-weight:600'>카테고리별 매출</span>",
-        unsafe_allow_html=True,
-    )
-    data = orders.groupby("category")["total_amount"].sum().sort_values(ascending=False)
-    if data.empty or data.sum() == 0:
-        st.info("표시할 데이터가 없습니다.")
-        return
-
-    bar_colors = [ACCENT] + [PALE_PURPLE] * (len(data) - 1)
-    text = [fmt_amount(v) for v in data.values]
-
-    fig = go.Figure(
-        go.Bar(
-            x=data.index.astype(str),
-            y=data.values,
-            marker_color=bar_colors,
-            text=text,
-            textposition="outside",
-            cliponaxis=False,
-            hovertemplate="%{x}: %{text}<extra></extra>",
+    """카테고리별 매출 랭킹 (항목이 많아 세로 막대로 넓게 표시). 카드 전체 클릭 시 챗봇 연동."""
+    with st.container(border=True, key="click_chart-category"):
+        st.markdown(
+            "<span style='font-size:0.85rem;font-weight:600'>카테고리별 매출</span>",
+            unsafe_allow_html=True,
         )
-    )
-    fig.update_layout(
-        height=230,
-        margin=dict(l=10, r=10, t=20, b=10),
-        yaxis=dict(visible=False, range=[0, data.values.max() * 1.2]),
-        plot_bgcolor="rgba(0,0,0,0)",
-    )
-    st.plotly_chart(fig, width='stretch')
+        data = orders.groupby("category")["total_amount"].sum().sort_values(ascending=False)
+        if data.empty or data.sum() == 0:
+            st.info("표시할 데이터가 없습니다.")
+            return
 
-    if st.button("🤖 이 차트 분석하기", key="ask-카테고리별 매출", use_container_width=True):
-        from ai_insights.chatbot import ask_chatbot
-        ask_chatbot("카테고리별 매출을 분석해줘")
+        bar_colors = [ACCENT] + [PALE_PURPLE] * (len(data) - 1)
+        text = [fmt_amount(v) for v in data.values]
+
+        fig = go.Figure(
+            go.Bar(
+                x=data.index.astype(str),
+                y=data.values,
+                marker_color=bar_colors,
+                text=text,
+                textposition="outside",
+                cliponaxis=False,
+                hovertemplate="%{x}: %{text}<extra></extra>",
+            )
+        )
+        fig.update_layout(
+            height=230,
+            margin=dict(l=10, r=10, t=20, b=10),
+            yaxis=dict(visible=False, range=[0, data.values.max() * 1.2]),
+            plot_bgcolor="rgba(0,0,0,0)",
+        )
+        st.plotly_chart(fig, width='stretch')
+
+        if st.button("이 차트 분석하기", key="ask_chart-category"):
+            from ai_insights.chatbot import ask_chatbot
+            ask_chatbot("카테고리별 매출을 분석해줘")
 
 
 def render_channel_ranking(users, orders):
@@ -494,55 +522,67 @@ def render_channel_ranking(users, orders):
     merged = orders.merge(users[["user_id", "acquisition_channel"]], on="user_id")
     gmv_by_channel = merged.groupby("acquisition_channel")["total_amount"].sum()
     gmv_by_channel.index = gmv_by_channel.index.map(CHANNEL_KR)
-    _render_ranked_bars("유입 채널별 매출", gmv_by_channel, ask_question="채널별 매출을 분석해줘")
+    _render_ranked_bars(
+        "유입 채널별 매출", gmv_by_channel,
+        ask_question="채널별 매출을 분석해줘", key="ranked-channel",
+    )
 
 
 def render_rfm_scatter(orders):
-    """RFM 산포도 (버블 차트) - x:구매빈도, y:구매금액, color:최근성"""
+    """RFM 산포도 (버블 차트) - x:구매빈도, y:구매금액, color:최근성. 이 차트는 '점에 마우스를
+    올리면 고객별 상세 정보'라는 hover 기능이 핵심 기능이라, 카드 전체 클릭 대신 제목 옆에
+    작은 '분석하기' 버튼만 남겨 hover는 그대로 살려둔다."""
     rfm = assign_segment(calculate_rfm(orders.copy()))
 
-    st.subheader(
-        "RFM 산포도",
-        help=(
-            "RFM은 고객을 최근성(Recency)·구매빈도(Frequency)·구매금액(Monetary) "
-            "세 지표로 분류하는 방법이에요.\n\n"
-            "- **X축**: 구매 빈도 (많을수록 오른쪽)\n"
-            "- **Y축**: 구매 금액 (클수록 위쪽)\n"
-            "- **색상**: 마지막 구매 후 지난 일수 (연할수록 최근, 진할수록 오래됨)\n"
-            "- **점 크기**: 구매 금액에 비례\n\n"
-            "점에 마우스를 올리면 고객별 상세 정보도 볼 수 있어요."
-        ),
-    )
+    with st.container(border=True):
+        col_title, col_btn = st.columns([6, 1])
+        with col_title:
+            st.subheader(
+                "RFM 산포도",
+                help=(
+                    "RFM은 고객을 최근성(Recency)·구매빈도(Frequency)·구매금액(Monetary) "
+                    "세 지표로 분류하는 방법이에요.\n\n"
+                    "- **X축**: 구매 빈도 (많을수록 오른쪽)\n"
+                    "- **Y축**: 구매 금액 (클수록 위쪽)\n"
+                    "- **색상**: 마지막 구매 후 지난 일수 (연할수록 최근, 진할수록 오래됨)\n"
+                    "- **점 크기**: 구매 금액에 비례\n\n"
+                    "점에 마우스를 올리면 고객별 상세 정보도 볼 수 있어요."
+                ),
+            )
+        with col_btn:
+            if st.button("🤖", key="ask-chart-rfm", help="이 차트를 AI에게 분석해달라고 요청"):
+                from ai_insights.chatbot import ask_chatbot
+                ask_chatbot("RFM 산포도를 분석해줘")
 
-    fig = px.scatter(
-        rfm,
-        x="Frequency",
-        y="Monetary",
-        color="Recency",
-        size="Monetary",
-        hover_data=["user_id", "segment"],
-        color_continuous_scale=[PALE_PURPLE, ACCENT],
-        labels={"Frequency": "구매 빈도", "Monetary": "구매 금액", "Recency": "최근성(일)"},
-    )
-    symbol = currency_config()["symbol"]
-    fig.update_traces(
-        marker=dict(opacity=0.75, line=dict(width=0)),
-        hovertemplate=(
-            "<b>고객 %{customdata[0]}</b> · %{customdata[1]}<br>"
-            "최근 구매: %{marker.color}일 전<br>"
-            "구매 빈도: %{x}회<br>"
-            f"구매 금액: {symbol}" + "%{y:,.0f}"
-            "<extra></extra>"
-        ),
-    )
-    fig.update_layout(
-        height=320,
-        margin=dict(t=30),
-        plot_bgcolor="rgba(0,0,0,0)",
-        xaxis=dict(gridcolor="#F0EDFB"),
-        yaxis=dict(gridcolor="#F0EDFB"),
-    )
-    st.plotly_chart(fig, width='stretch')
+        fig = px.scatter(
+            rfm,
+            x="Frequency",
+            y="Monetary",
+            color="Recency",
+            size="Monetary",
+            hover_data=["user_id", "segment"],
+            color_continuous_scale=[PALE_PURPLE, ACCENT],
+            labels={"Frequency": "구매 빈도", "Monetary": "구매 금액", "Recency": "최근성(일)"},
+        )
+        symbol = currency_config()["symbol"]
+        fig.update_traces(
+            marker=dict(opacity=0.75, line=dict(width=0)),
+            hovertemplate=(
+                "<b>고객 %{customdata[0]}</b> · %{customdata[1]}<br>"
+                "최근 구매: %{marker.color}일 전<br>"
+                "구매 빈도: %{x}회<br>"
+                f"구매 금액: {symbol}" + "%{y:,.0f}"
+                "<extra></extra>"
+            ),
+        )
+        fig.update_layout(
+            height=320,
+            margin=dict(t=30),
+            plot_bgcolor="rgba(0,0,0,0)",
+            xaxis=dict(gridcolor="#F0EDFB"),
+            yaxis=dict(gridcolor="#F0EDFB"),
+        )
+        st.plotly_chart(fig, width='stretch')
 
 
 def _render_funnel_bars(labels, values, color):
@@ -571,7 +611,7 @@ def _render_funnel_bars(labels, values, color):
 
 def render_funnel(events):
     """구매 퍼널 (방문 → 상품조회 → 장바구니 → 구매). 각 단계를 최초 방문자 수 대비
-    도달 비율만큼 채운 진행 바로 표시"""
+    도달 비율만큼 채운 진행 바로 표시. 카드 전체 클릭 시 챗봇 연동."""
     stages = [
         ("page_view", "방문"),
         ("product_view", "상품조회"),
@@ -581,16 +621,21 @@ def render_funnel(events):
     values = [events.loc[events["event_type"] == key, "session_id"].nunique() for key, _ in stages]
     labels = [label for _, label in stages]
 
-    st.subheader("구매 퍼널")
-    _render_funnel_bars(labels, values, ACCENT)
+    with st.container(border=True, key="click_chart-funnel"):
+        st.subheader("구매 퍼널")
+        _render_funnel_bars(labels, values, ACCENT)
 
-    # 단계 전환마다 전환율을 같이 보여줌 (세션 내 이벤트가 같은 시각으로 기록돼 있어 소요시간은 의미가 없어 제외)
-    rows_html = "".join(
-        f"<div class='summary-row'><span class='summary-label'>{stages[i - 1][1]} → {stages[i][1]}</span>"
-        f"<span class='summary-value'>{(values[i] / values[i - 1] * 100) if values[i - 1] else 0.0:.1f}%</span></div>"
-        for i in range(1, len(stages))
-    )
-    st.markdown(f"<div style='margin-top:16px'>{rows_html}</div>", unsafe_allow_html=True)
+        # 단계 전환마다 전환율을 같이 보여줌 (세션 내 이벤트가 같은 시각으로 기록돼 있어 소요시간은 의미가 없어 제외)
+        rows_html = "".join(
+            f"<div class='summary-row'><span class='summary-label'>{stages[i - 1][1]} → {stages[i][1]}</span>"
+            f"<span class='summary-value'>{(values[i] / values[i - 1] * 100) if values[i - 1] else 0.0:.1f}%</span></div>"
+            for i in range(1, len(stages))
+        )
+        st.markdown(f"<div style='margin-top:16px'>{rows_html}</div>", unsafe_allow_html=True)
+
+        if st.button("이 차트 분석하기", key="ask_chart-funnel"):
+            from ai_insights.chatbot import ask_chatbot
+            ask_chatbot("구매 퍼널을 분석해줘")
 
 
 def render_repeat_funnel(users, orders, start, end):
@@ -715,45 +760,46 @@ def render_cohort(users, orders_full, start, end):
         for row in retention.values
     ]
 
-    st.subheader("재구매 유지율", help=cohort_help)
+    with st.container(border=True, key="click_chart-cohort"):
+        st.subheader("재구매 유지율", help=cohort_help)
 
-    fig = go.Figure(
-        go.Heatmap(
-            z=retention.values,
-            x=[f"{i}개월차" for i in retention.columns],
-            y=[str(i) for i in retention.index],
-            colorscale=[[i / (len(PURPLE_SCALE) - 1), c] for i, c in enumerate(PURPLE_SCALE)],
-            text=text_matrix,
-            texttemplate="%{text}",
-            textfont=dict(size=12),
-            hoverongaps=False,
-            showscale=False,
-            xgap=4,
-            ygap=4,
+        fig = go.Figure(
+            go.Heatmap(
+                z=retention.values,
+                x=[f"{i}개월차" for i in retention.columns],
+                y=[str(i) for i in retention.index],
+                colorscale=[[i / (len(PURPLE_SCALE) - 1), c] for i, c in enumerate(PURPLE_SCALE)],
+                text=text_matrix,
+                texttemplate="%{text}",
+                textfont=dict(size=12),
+                hoverongaps=False,
+                showscale=False,
+                xgap=4,
+                ygap=4,
+            )
         )
-    )
-    fig.update_layout(
-        height=max(220, 32 * len(retention.index) + 60),
-        margin=dict(t=30),
-        # 코호트가 1개뿐이면 "2026-06" 같은 축 라벨을 Plotly가 날짜로 오인해서 초 단위
-        # 눈금을 그리는 경우가 있어, 항상 카테고리(문자열) 축으로 명시해서 막는다.
-        xaxis=dict(type="category"),
-        yaxis=dict(type="category"),
-        plot_bgcolor="rgba(0,0,0,0)",
-    )
-    st.plotly_chart(fig, width='stretch')
+        fig.update_layout(
+            height=max(220, 32 * len(retention.index) + 60),
+            margin=dict(t=30),
+            # 코호트가 1개뿐이면 "2026-06" 같은 축 라벨을 Plotly가 날짜로 오인해서 초 단위
+            # 눈금을 그리는 경우가 있어, 항상 카테고리(문자열) 축으로 명시해서 막는다.
+            xaxis=dict(type="category"),
+            yaxis=dict(type="category"),
+            plot_bgcolor="rgba(0,0,0,0)",
+        )
+        st.plotly_chart(fig, width='stretch')
 
-    st.markdown(
-        "<div style='display:flex;align-items:center;gap:8px;margin-top:-8px'>"
-        "<span style='font-size:11px;color:var(--athlepa-muted-text)'>낮음</span>"
-        f"<div style='flex:1;height:8px;border-radius:4px;background:linear-gradient(to right,{','.join(PURPLE_SCALE)})'></div>"
-        "<span style='font-size:11px;color:var(--athlepa-muted-text)'>높음</span></div>",
-        unsafe_allow_html=True,
-    )
+        st.markdown(
+            "<div style='display:flex;align-items:center;gap:8px;margin-top:-8px'>"
+            "<span style='font-size:11px;color:var(--athlepa-muted-text)'>낮음</span>"
+            f"<div style='flex:1;height:8px;border-radius:4px;background:linear-gradient(to right,{','.join(PURPLE_SCALE)})'></div>"
+            "<span style='font-size:11px;color:var(--athlepa-muted-text)'>높음</span></div>",
+            unsafe_allow_html=True,
+        )
 
-    if st.button("🤖 이 차트 분석하기", key="ask-재구매 유지율", use_container_width=True):
-        from ai_insights.chatbot import ask_chatbot
-        ask_chatbot("재구매 유지율을 분석해줘")
+        if st.button("이 차트 분석하기", key="ask_chart-cohort"):
+            from ai_insights.chatbot import ask_chatbot
+            ask_chatbot("재구매 유지율을 분석해줘")
 
 
 DATE_PRESETS = {
