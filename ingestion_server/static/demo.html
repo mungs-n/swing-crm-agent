@@ -60,6 +60,15 @@
     이 페이지에서 발생시킨 이벤트는 CRM 대시보드의 활성 사용자 지표(DAU/WAU/MAU)와 퍼널 분석에 몇 초 안에 반영됩니다.
   </div>
 
+  <div class="banner" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+    <span>이 페이지에서도 웹 푸시 알림을 받아볼 수 있어요. 허용하면 나오는 토큰을 CRM 캠페인 관리 &gt; 테스트 발송 수신자 칸에 붙여넣으세요.</span>
+    <button id="fcm-btn" onclick="requestPush()" style="border:none;border-radius:8px;padding:8px 12px;font-size:0.8rem;font-weight:600;background:var(--purple);color:white;cursor:pointer;white-space:nowrap;">🔔 알림 받기</button>
+  </div>
+  <div id="fcm-result" class="log-box" style="display:none;">
+    <div class="title">알림 토큰</div>
+    <div id="fcm-token" class="log-line" style="user-select:all;"></div>
+  </div>
+
   <div class="grid">
     <div class="card">
       <div class="thumb">🩳</div>
@@ -119,6 +128,47 @@
   }
 
   log("페이지 로드 — page_view 이벤트 자동 전송됨");
+</script>
+
+<script src="https://www.gstatic.com/firebasejs/12.18.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/12.18.0/firebase-messaging-compat.js"></script>
+<script>
+  var firebaseConfig = {
+    apiKey: "AIzaSyCPuVPbLsrUPDYxnUhdvRtxI3ByrnUU5dw",
+    authDomain: "athlepa.firebaseapp.com",
+    projectId: "athlepa",
+    storageBucket: "athlepa.firebasestorage.app",
+    messagingSenderId: "332733557227",
+    appId: "1:332733557227:web:0f3be7f3c0fcde3e0111ae",
+  };
+  var VAPID_KEY = "BEAJFNOmdDsKwhpi6FTMeOMDJ4gTiXOpd472SUAdR_4K0qFOAH-nEbfSCp4l-ZIbtziCnwgPGzsxJ4a5RHnFGGI";
+  firebase.initializeApp(firebaseConfig);
+
+  async function requestPush() {
+    var btn = document.getElementById("fcm-btn");
+    var resultBox = document.getElementById("fcm-result");
+    var tokenLine = document.getElementById("fcm-token");
+    btn.disabled = true;
+    btn.textContent = "요청 중...";
+    try {
+      var permission = await Notification.requestPermission();
+      if (permission !== "granted") {
+        throw new Error("알림 권한이 거부됐어요.");
+      }
+      await navigator.serviceWorker.register("/firebase-messaging-sw.js");
+      var registration = await navigator.serviceWorker.ready;
+      var messaging = firebase.messaging();
+      var token = await messaging.getToken({ vapidKey: VAPID_KEY, serviceWorkerRegistration: registration });
+      resultBox.style.display = "block";
+      tokenLine.textContent = token;
+      btn.textContent = "✓ 알림 허용됨";
+    } catch (e) {
+      resultBox.style.display = "block";
+      tokenLine.textContent = "오류: " + e.message;
+      btn.disabled = false;
+      btn.textContent = "🔔 알림 받기";
+    }
+  }
 </script>
 </body>
 </html>
